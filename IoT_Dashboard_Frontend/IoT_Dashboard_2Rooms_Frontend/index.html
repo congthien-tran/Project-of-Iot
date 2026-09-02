@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Indoor IoT Dashboard - 2 Phòng Riêng Biệt (Khách & Ngủ)</title>
+  <!-- 1. Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 2. Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- 3. Paho MQTT CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .font-mono { font-family: 'JetBrains Mono', monospace; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-3 sm:p-5 lg:p-7">
+
+  <!-- ======================== HEADER TỔNG ======================== -->
+  <header class="max-w-7xl mx-auto mb-6 bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <div class="p-2.5 bg-indigo-600/20 text-indigo-400 rounded-xl border border-indigo-500/20">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
+      </div>
+      <div>
+        <h1 class="text-lg sm:text-xl md:text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+          HỆ THỐNG GIÁM SÁT MÔI TRƯỜNG & KHÍ HẬU 2 PHÒNG
+          <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 hidden sm:inline-block">2 Tầng Độc Lập</span>
+        </h1>
+        <p class="text-xs sm:text-sm text-slate-400">Mô hình nhà 2 tầng: Phòng Khách (Tầng 1) & Phòng Ngủ (Tầng 2) | Nhóm ĐTV-02</p>
+      </div>
+    </div>
+
+    <!-- Khối trạng thái & Nút điều khiển -->
+    <div class="flex flex-wrap items-center gap-2.5 text-xs sm:text-sm">
+      <!-- Trạng thái ESP32 -->
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700">
+        <span id="device-status-dot" class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+        <span class="text-slate-400">ESP32:</span>
+        <span id="device-status-text" class="font-semibold text-rose-400">Offline</span>
+      </div>
+
+      <!-- Độ tươi dữ liệu -->
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700">
+        <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <span class="text-slate-400">Cập nhật:</span>
+        <span id="freshness-text" class="font-mono text-amber-400 font-medium">Chưa có tin</span>
+      </div>
+
+      <!-- MQTT Config Button -->
+      <button onclick="toggleConfigModal()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl border border-slate-700 transition flex items-center gap-1.5">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+        <span>MQTT Config</span>
+      </button>
+
+      <!-- Nút Mô phỏng 2 Phòng -->
+      <button id="btn-simulation" onclick="toggleSimulation()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl transition flex items-center gap-1.5 shadow-lg shadow-indigo-600/30">
+        <span>Test UI (Mô phỏng 2 Phòng)</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ======================== CẢNH BÁO TỔNG ======================== -->
+  <div id="alarm-banner" class="max-w-7xl mx-auto mb-6 hidden bg-rose-500/10 border border-rose-500/30 rounded-xl p-4 text-rose-300 flex items-center justify-between animate-pulse">
+    <div class="flex items-center gap-3">
+      <svg class="w-5 h-5 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+      <span id="alarm-message" class="font-medium text-xs sm:text-sm">Cảnh báo: Chỉ số môi trường vượt ngưỡng!</span>
+    </div>
+    <span class="text-xs bg-rose-500/20 px-2.5 py-1 rounded font-semibold text-rose-300">CẦN XỬ LÝ</span>
+  </div>
+
+  <!-- ======================== MAIN CONTAINER: 2 PHÒNG RIÊNG BIỆT ======================== -->
+  <main class="max-w-7xl mx-auto space-y-7">
+
+    <!-- ==================== KHU VỰC 1: PHÒNG KHÁCH (TẦNG 1) ==================== -->
+    <section class="bg-slate-900/90 border-2 border-indigo-500/40 rounded-3xl p-5 sm:p-6 shadow-2xl relative overflow-hidden">
+      <!-- Header Phòng 1 -->
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 mb-5 border-b border-slate-800 gap-3">
+        <div class="flex items-center gap-3">
+          <div class="p-2.5 bg-indigo-500/20 text-indigo-400 rounded-xl">
+            <!-- Icon Sofa / Living Room -->
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+          </div>
+          <div>
+            <h2 class="text-lg sm:text-xl font-bold text-white flex items-center gap-2">
+              PHÒNG KHÁCH (TẦNG 1)
+              <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Room 1</span>
+            </h2>
+            <p class="text-xs text-slate-400">3 Cảm biến (DHT22, BH1750, PIR) + 1 Quạt DC (MOSFET) + 1 Đèn LED (BJT)</p>
+          </div>
+        </div>
+
+        <!-- Chế độ Auto / Manual riêng của Phòng 1 -->
+        <div class="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+          <span class="text-xs text-slate-400 px-2">Chế độ:</span>
+          <button id="r1-btn-auto" onclick="setRoomMode(1, 'AUTO')" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-600 text-white shadow-md transition">
+            Auto
+          </button>
+          <button id="r1-btn-manual" onclick="setRoomMode(1, 'MANUAL')" class="px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition">
+            Manual
+          </button>
+        </div>
+      </div>
+
+      <!-- Lưới 3 Cảm biến + 2 Thiết bị chấp hành của Phòng 1 -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        
+        <!-- Cảm biến 1: Nhiệt độ & Độ ẩm (DHT22) Phòng 1 -->
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner">
+          <div class="flex justify-between items-center text-slate-400 mb-2">
+            <span class="text-xs font-medium">Nhiệt ẩm DHT22 (#1)</span>
+            <span class="p-1.5 bg-orange-500/10 text-orange-400 rounded-lg">🌡️</span>
+          </div>
+          <div class="flex items-baseline gap-1.5">
+            <span id="r1-temp" class="text-2xl sm:text-3xl font-bold font-mono text-white">--.-</span>
+            <span class="text-xs text-slate-400">°C</span>
+            <span class="text-slate-600 mx-1">|</span>
+            <span id="r1-humid" class="text-xl sm:text-2xl font-bold font-mono text-cyan-400">--</span>
+            <span class="text-xs text-slate-400">%</span>
+          </div>
+          <div class="mt-2 text-[11px] text-slate-400 flex justify-between border-t border-slate-800/60 pt-2">
+            <span>Heat Index:</span>
+            <span id="r1-heat-index" class="font-mono text-orange-400 font-semibold">--.- °C</span>
+          </div>
+        </div>
+
+        <!-- Cảm biến 2: Cường độ sáng (BH1750) Phòng 1 -->
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner">
+          <div class="flex justify-between items-center text-slate-400 mb-2">
+            <span class="text-xs font-medium">Ánh sáng BH1750 (#1)</span>
+            <span class="p-1.5 bg-yellow-500/10 text-yellow-400 rounded-lg">☀️</span>
+          </div>
+          <div class="flex items-baseline gap-1.5">
+            <span id="r1-lux" class="text-2xl sm:text-3xl font-bold font-mono text-white">---</span>
+            <span class="text-xs text-slate-400">Lux</span>
+          </div>
+          <div class="mt-2 text-[11px] text-slate-400 flex justify-between border-t border-slate-800/60 pt-2">
+            <span>Đánh giá:</span>
+            <span id="r1-lux-status" class="text-yellow-400 font-medium">Đủ sáng</span>
+          </div>
+        </div>
+
+        <!-- Cảm biến 3: Chuyển động / Hiện diện (PIR) Phòng 1 -->
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner flex flex-col justify-between">
+          <div class="flex justify-between items-center text-slate-400 mb-2">
+            <span class="text-xs font-medium">Hiện diện PIR (#1)</span>
+            <span class="p-1.5 bg-emerald-500/10 text-emerald-400 rounded-lg">🚶</span>
+          </div>
+          <div>
+            <span id="r1-pir-badge" class="block text-center py-1.5 px-2 rounded-lg text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+              Không có người
+            </span>
+          </div>
+          <div class="mt-2 text-[11px] text-slate-500 text-center border-t border-slate-800/60 pt-1.5">
+            Vị trí: Cửa chính / Sofa
+          </div>
+        </div>
+
+        <!-- Thiết bị 1: Quạt DC Thông Gió Phòng 1 (MOSFET) -->
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner flex flex-col justify-between">
+          <div>
+            <div class="flex justify-between items-center mb-2">
+              <span class="text-xs font-bold text-sky-300 flex items-center gap-1">🌀 Quạt 1 (DC)</span>
+              <span id="r1-fan-badge" class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400">OFF</span>
+            </div>
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <button id="r1-btn-fan" onclick="toggleRoomActuator(1, 'fan')" class="flex-1 py-1 px-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+                BẬT
+              </button>
+              <span id="r1-fan-pwm-label" class="text-xs font-mono text-sky-400">0%</span>
+            </div>
+          </div>
+          <div>
+            <input id="r1-fan-slider" type="range" min="0" max="100" value="0" oninput="onRoomSliderInput(1, 'fan', this.value)" onchange="sendRoomPWM(1, 'fan', this.value)" class="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-sky-500">
+          </div>
+        </div>
+
+        <!-- Thiết bị 2: Đèn LED Chiếu Sáng Phòng 1 (BJT) -->
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner flex flex-col justify-between">
+          <div>
+            <div class="flex justify-between items-center mb-2">
+              <span class="text-xs font-bold text-amber-300 flex items-center gap-1">💡 Đèn 1 (LED)</span>
+              <span id="r1-led-badge" class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400">OFF</span>
+            </div>
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <button id="r1-btn-led" onclick="toggleRoomActuator(1, 'led')" class="flex-1 py-1 px-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+                BẬT
+              </button>
+              <span id="r1-led-pwm-label" class="text-xs font-mono text-amber-400">0%</span>
+            </div>
+          </div>
+          <div>
+            <input id="r1-led-slider" type="range" min="0" max="100" value="0" oninput="onRoomSliderInput(1, 'led', this.value)" onchange="sendRoomPWM(1, 'led', this.value)" class="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-amber-500">
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ==================== KHU VỰC 2: PHÒNG NGỦ (TẦNG 2) ==================== -->
+    <section class="bg-slate-900/90 border-2 border-emerald-500/40 rounded-3xl p-5 sm:p-6 shadow-2xl relative overflow-hidden">
+      <!-- Header Phòng 2 -->
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 mb-5 border-b border-slate-800 gap-3">
+        <div class="flex items-center gap-3">
+          <div class="p-2.5 bg-emerald-500/20 text-emerald-400 rounded-xl">
+            <!-- Icon Bed / Bedroom -->
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+          </div>
+          <div>
+            <h2 class="text-lg sm:text-xl font-bold text-white flex items-center gap-2">
+              PHÒNG NGỦ (TẦNG 2)
+              <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Room 2</span>
+            </h2>
+            <p class="text-xs text-slate-400">3 Cảm biến (DHT22, BH1750, PIR) + 1 Quạt DC (MOSFET) + 1 Đèn LED (BJT)</p>
+          </div>
+        </div>
+
+        <!-- Chế độ Auto / Manual riêng của Phòng 2 -->
+        <div class="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+          <span class="text-xs text-slate-400 px-2">Chế độ:</span>
+          <button id="r2-btn-auto" onclick="setRoomMode(2, 'AUTO')" class="px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-600 text-white shadow-md transition">
+            Auto
+          </button>
+          <button id="r2-btn-manual" onclick="setRoomMode(2, 'MANUAL')" class="px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition">
+            Manual
+          </button>
+        </div>
+      </div>
+
+      <!-- Lưới 3 Cảm biến + 2 Thiết bị chấp hành của Phòng 2 -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        
+        <!-- Cảm biến 1: Nhiệt độ & Độ ẩm (DHT22) Phòng 2 -->
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner">
+          <div class="flex justify-between items-center text-slate-400 mb-2">
+            <span class="text-xs font-medium">Nhiệt ẩm DHT22 (#2)</span>
+            <span class="p-1.5 bg-orange-500/10 text-orange-400 rounded-lg">🌡️</span>
+          </div>
+          <div class="flex items-baseline gap-1.5">
+            <span id="r2-temp" class="text-2xl sm:text-3xl font-bold font-mono text-white">--.-</span>
+            <span class="text-xs text-slate-400">°C</span>
+            <span class="text-slate-600 mx-1">|</span>
+            <span id="r2-humid" class="text-xl sm:text-2xl font-bold font-mono text-cyan-400">--</span>
+            <span class="text-xs text-slate-400">%</span>
+          </div>
+          <div class="mt-2 text-[11px] text-slate-400 flex justify-between border-t border-slate-800/60 pt-2">
+            <span>Heat Index:</span>
+            <span id="r2-heat-index" class="font-mono text-orange-400 font-semibold">--.- °C</span>
+          </div>
+        </div>
+
+        <!-- Cảm biến 2: Cường độ sáng (BH1750) Phòng 2 -->
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner">
+          <div class="flex justify-between items-center text-slate-400 mb-2">
+            <span class="text-xs font-medium">Ánh sáng BH1750 (#2)</span>
+            <span class="p-1.5 bg-yellow-500/10 text-yellow-400 rounded-lg">☀️</span>
+          </div>
+          <div class="flex items-baseline gap-1.5">
+            <span id="r2-lux" class="text-2xl sm:text-3xl font-bold font-mono text-white">---</span>
+            <span class="text-xs text-slate-400">Lux</span>
+          </div>
+          <div class="mt-2 text-[11px] text-slate-400 flex justify-between border-t border-slate-800/60 pt-2">
+            <span>Đánh giá:</span>
+            <span id="r2-lux-status" class="text-yellow-400 font-medium">Dịu nhẹ</span>
+          </div>
+        </div>
+
+        <!-- Cảm biến 3: Chuyển động / Hiện diện (PIR) Phòng 2 -->
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner flex flex-col justify-between">
+          <div class="flex justify-between items-center text-slate-400 mb-2">
+            <span class="text-xs font-medium">Hiện diện PIR (#2)</span>
+            <span class="p-1.5 bg-emerald-500/10 text-emerald-400 rounded-lg">🚶</span>
+          </div>
+          <div>
+            <span id="r2-pir-badge" class="block text-center py-1.5 px-2 rounded-lg text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+              Không có người
+            </span>
+          </div>
+          <div class="mt-2 text-[11px] text-slate-500 text-center border-t border-slate-800/60 pt-1.5">
+            Vị trí: Cầu thang / Giường
+          </div>
+        </div>
+
+        <!-- Thiết bị 1: Quạt DC Thông Gió Phòng 2 (MOSFET) -->
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner flex flex-col justify-between">
+          <div>
+            <div class="flex justify-between items-center mb-2">
+              <span class="text-xs font-bold text-sky-300 flex items-center gap-1">🌀 Quạt 2 (DC)</span>
+              <span id="r2-fan-badge" class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400">OFF</span>
+            </div>
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <button id="r2-btn-fan" onclick="toggleRoomActuator(2, 'fan')" class="flex-1 py-1 px-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+                BẬT
+              </button>
+              <span id="r2-fan-pwm-label" class="text-xs font-mono text-sky-400">0%</span>
+            </div>
+          </div>
+          <div>
+            <input id="r2-fan-slider" type="range" min="0" max="100" value="0" oninput="onRoomSliderInput(2, 'fan', this.value)" onchange="sendRoomPWM(2, 'fan', this.value)" class="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-sky-500">
+          </div>
+        </div>
+
+        <!-- Thiết bị 2: Đèn LED Chiếu Sáng Phòng 2 (BJT) -->
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner flex flex-col justify-between">
+          <div>
+            <div class="flex justify-between items-center mb-2">
+              <span class="text-xs font-bold text-amber-300 flex items-center gap-1">💡 Đèn 2 (LED)</span>
+              <span id="r2-led-badge" class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400">OFF</span>
+            </div>
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <button id="r2-btn-led" onclick="toggleRoomActuator(2, 'led')" class="flex-1 py-1 px-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+                BẬT
+              </button>
+              <span id="r2-led-pwm-label" class="text-xs font-mono text-amber-400">0%</span>
+            </div>
+          </div>
+          <div>
+            <input id="r2-led-slider" type="range" min="0" max="100" value="0" oninput="onRoomSliderInput(2, 'led', this.value)" onchange="sendRoomPWM(2, 'led', this.value)" class="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-amber-500">
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ==================== KHU VỰC 3: BIỂU ĐỒ SO SÁNH 2 PHÒNG ==================== -->
+    <div class="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <div>
+          <h3 class="text-base font-bold text-white flex items-center gap-2">
+            <svg class="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path></svg>
+            Biểu Đồ So Sánh Môi Trường Thời Gian Thực Giữa 2 Phòng
+          </h3>
+          <p class="text-xs text-slate-400">Đường liền nét: Phòng Khách (Tầng 1) | Đường đứt nét: Phòng Ngủ (Tầng 2)</p>
+        </div>
+
+        <div class="flex items-center gap-2 text-xs">
+          <button onclick="switchChartMetric('temp')" class="px-3 py-1.5 rounded-lg bg-orange-600/20 text-orange-300 border border-orange-500/30">Nhiệt độ (°C)</button>
+          <button onclick="switchChartMetric('humid')" class="px-3 py-1.5 rounded-lg bg-cyan-600/20 text-cyan-300 border border-cyan-500/30">Độ ẩm (%)</button>
+          <button onclick="switchChartMetric('lux')" class="px-3 py-1.5 rounded-lg bg-yellow-600/20 text-yellow-300 border border-yellow-500/30">Ánh sáng (Lux)</button>
+        </div>
+      </div>
+
+      <div class="h-64 sm:h-72 w-full">
+        <canvas id="roomsChart"></canvas>
+      </div>
+    </div>
+
+    <!-- ==================== KHU VỰC 4: HIỆU NĂNG THỰC NGHIỆM & LOG ==================== -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div class="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-xl flex flex-col justify-between">
+        <div>
+          <h4 class="text-sm font-bold text-white mb-3 flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Đo Đạc Độ Trễ (Tuần 3)
+          </h4>
+          <div class="space-y-2.5 text-xs">
+            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 flex justify-between items-center">
+              <div>
+                <p class="text-slate-400 font-medium">Telemetry Latency:</p>
+                <p class="text-[10px] text-slate-500">(ESP32 &rarr; Web)</p>
+              </div>
+              <span id="telemetry-latency-val" class="text-base font-mono font-bold text-emerald-400">-- ms</span>
+            </div>
+            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 flex justify-between items-center">
+              <div>
+                <p class="text-slate-400 font-medium">Command Response:</p>
+                <p class="text-[10px] text-slate-500">(Web &rarr; Chấp hành)</p>
+              </div>
+              <span id="command-latency-val" class="text-base font-mono font-bold text-sky-400">-- ms</span>
+            </div>
+          </div>
+        </div>
+
+        <button onclick="pingLatencyTest()" class="mt-4 w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700 transition">
+          Gửi Test Ping Đo Độ Trễ
+        </button>
+      </div>
+
+      <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-xl flex flex-col">
+        <div class="flex items-center justify-between mb-2">
+          <h4 class="text-sm font-bold text-white">Nhật Ký Gói Tin MQTT 2 Phòng (Event Console)</h4>
+          <button onclick="clearConsoleLog()" class="text-xs text-slate-500 hover:text-slate-300">Xóa log</button>
+        </div>
+        <div id="console-log-box" class="flex-1 min-h-[120px] max-h-[140px] overflow-y-auto bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-[11px] text-slate-400 space-y-1">
+          <p class="text-slate-500">[System] Khởi động giao diện giám sát 2 phòng...</p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ======================== CONFIG MODAL ======================== -->
+  <div id="config-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-base font-bold text-white">Cấu Hình MQTT Broker 2 Phòng</h3>
+        <button onclick="toggleConfigModal()" class="text-slate-400 hover:text-white">&times;</button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-400 mb-1">Broker Host (IP hoặc Domain):</label>
+          <input id="cfg-host" type="text" value="broker.emqx.io" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 font-mono">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">WebSocket Port:</label>
+          <input id="cfg-port" type="number" value="8083" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 font-mono">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Telemetry Topic chung:</label>
+          <input id="cfg-topic" type="text" value="hcmute/iot/climate/telemetry" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 font-mono">
+        </div>
+      </div>
+      <div class="mt-6 flex justify-end gap-3">
+        <button onclick="toggleConfigModal()" class="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl text-xs">Hủy</button>
+        <button onclick="saveAndReconnectMQTT()" class="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-semibold">Lưu & Kết Nối Lại</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

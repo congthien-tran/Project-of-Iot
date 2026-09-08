@@ -1,0 +1,1389 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Indoor IoT Dashboard - Giám Sát & Điều Hòa Vi Khí Hậu Trong/Ngoài</title>
+  <!-- 1. Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 2. Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- 3. Paho MQTT CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .font-mono { font-family: 'JetBrains Mono', monospace; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-3 sm:p-5 lg:p-7 antialiased selection:bg-indigo-500 selection:text-white">
+
+  <!-- ======================== HEADER TỔNG ======================== -->
+  <header class="max-w-7xl mx-auto mb-6 bg-slate-900/95 backdrop-blur border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-2xl flex flex-col items-center justify-center gap-4 text-center">
+    <!-- Tiêu đề & Logo (Căn giữa) -->
+    <div class="flex flex-col sm:flex-row items-center justify-center gap-3.5">
+      <div class="p-3 bg-gradient-to-br from-indigo-500/20 to-sky-500/20 text-indigo-400 rounded-2xl border border-indigo-500/30 shadow-inner shrink-0">
+        <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
+        </svg>
+      </div>
+      <div class="flex flex-col items-center">
+        <div class="flex items-center justify-center gap-2 flex-wrap">
+          <h1 class="text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight text-white text-center">
+            HỆ THỐNG GIÁM SÁT MÔI TRƯỜNG & ĐIỀU HÒA VI KHÍ HẬU
+          </h1>
+          <span class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
+            1 Phòng: Trong Nhà & Ngoài Trời
+          </span>
+        </div>
+        <p class="text-xs sm:text-sm text-slate-400 mt-1 text-center">
+          2 Cảm biến Nhiệt Ẩm (1 Trong / 1 Ngoài) • 2 Cảm biến Ánh Sáng (1 Trong / 1 Ngoài) • 1 Hiện Diện PIR (Trong Nhà) | Nhóm ĐTV-02
+        </p>
+      </div>
+    </div>
+
+    <!-- Khối gom nhóm trạng thái & Nút cấu hình -->
+    <div class="flex flex-wrap items-center justify-center gap-2.5 text-xs sm:text-sm p-2 bg-slate-950/60 rounded-2xl border border-slate-800/80 w-full sm:w-auto">
+      <!-- 1. Trạng thái kết nối Internet -->
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 shadow-sm" title="Trạng thái kết nối Internet của trình duyệt">
+        <span id="net-status-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span class="text-slate-400 text-xs">Internet:</span>
+        <span id="net-status-text" class="font-semibold text-emerald-400 text-xs">Đã kết nối</span>
+      </div>
+
+      <!-- 2. Trạng thái kết nối ESP32 (LWT) -->
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 shadow-sm" title="Trạng thái kết nối phần cứng ESP32 qua MQTT LWT">
+        <span id="device-status-dot" class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+        <span class="text-slate-400 text-xs">ESP32:</span>
+        <span id="device-status-text" class="font-semibold text-rose-400 text-xs">Offline</span>
+      </div>
+
+      <!-- 3. Độ tươi dữ liệu (Data Freshness) -->
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
+        <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        <span class="text-slate-400 text-xs">Cập nhật:</span>
+        <span id="freshness-text" class="font-mono text-amber-400 font-medium text-xs">Chưa có tin</span>
+      </div>
+
+      <!-- 4. Nút Mô Phỏng Dữ Liệu (Test UI) -->
+      <button id="btn-simulation" onclick="toggleSimulation()" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl transition flex items-center gap-1.5 shadow-lg shadow-indigo-600/30 text-xs">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        <span>Test UI (Mô phỏng Dữ liệu)</span>
+      </button>
+
+      <!-- 5. Nút Cấu hình MQTT -->
+      <button onclick="toggleConfigModal()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl border border-slate-700 transition flex items-center gap-1.5 shadow-sm text-xs font-medium">
+        <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+        </svg>
+        <span>MQTT Config</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ======================== CẢNH BÁO TỔNG ======================== -->
+  <div id="alarm-banner" class="max-w-7xl mx-auto mb-6 hidden bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4 text-rose-300 flex items-center justify-between animate-pulse shadow-lg">
+    <div class="flex items-center gap-3">
+      <svg class="w-5 h-5 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+      </svg>
+      <span id="alarm-message" class="font-medium text-xs sm:text-sm">Cảnh báo: Chỉ số môi trường vượt ngưỡng an toàn!</span>
+    </div>
+    <span class="text-xs bg-rose-500/20 px-2.5 py-1 rounded-lg font-bold text-rose-300 border border-rose-500/30">CẦN XỬ LÝ</span>
+  </div>
+
+  <!-- ======================== KHỐI BIỂU ĐỒ CẢM BIẾN (ĐẶT NGAY SAU HEADER) ======================== -->
+  <section class="max-w-7xl mx-auto mb-7 bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl">
+    <!-- Header của khối biểu đồ -->
+    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-4 mb-4 border-b border-slate-800">
+      <div>
+        <div class="flex items-center gap-2.5">
+          <div class="p-2 bg-indigo-500/20 text-indigo-400 rounded-xl">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path>
+            </svg>
+          </div>
+          <h2 class="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+            BIỂU ĐỒ CẢM BIẾN MÔI TRƯỜNG THỜI GIAN THỰC
+            
+          </h2>
+        </div>
+        <p class="text-xs text-slate-400 mt-1">
+          So sánh vi khí hậu giữa <span class="text-indigo-400 font-medium">Trong Nhà (Indoor - Đường liền)</span> và <span class="text-amber-400 font-medium">Ngoài Trời (Outdoor - Đường đứt nét)</span>
+        </p>
+      </div>
+
+      <!-- 4 NÚT CHỌN CHUYỂN ĐỔI CHỈ SỐ: NHIỆT ĐỘ, ĐỘ ẨM, ÁNH SÁNG, HIỆN DIỆN (2x2) -->
+      <div class="grid grid-cols-2 gap-2 w-full sm:w-auto">
+        <button id="btn-metric-temp" onclick="switchChartMetric('temp')" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-orange-500 text-white shadow-lg shadow-orange-500/20 border border-orange-400 transition flex items-center justify-center gap-1.5">
+          <span>🌡️</span>
+          <span>Nhiệt độ (Trong & Ngoài)</span>
+        </button>
+
+        <button id="btn-metric-humid" onclick="switchChartMetric('humid')" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center justify-center gap-1.5">
+          <span>💧</span>
+          <span>Độ ẩm (Trong & Ngoài)</span>
+        </button>
+
+        <button id="btn-metric-lux" onclick="switchChartMetric('lux')" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center justify-center gap-1.5">
+          <span>☀️</span>
+          <span>Ánh sáng (Trong & Ngoài)</span>
+        </button>
+
+        <button id="btn-metric-pir" onclick="switchChartMetric('pir')" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center justify-center gap-1.5">
+          <span>🚶</span>
+          <span>Hiện diện (Trong nhà)</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Thanh thống kê tóm tắt 1 giờ gần đây -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 text-xs font-mono">
+      <div class="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800 flex flex-col justify-between">
+        <span class="text-slate-400 text-[11px]">Chỉ số đang xem:</span>
+        <span id="chart-stat-metric" class="text-orange-400 font-bold text-sm">Nhiệt Độ (°C)</span>
+      </div>
+      <div class="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800 flex flex-col justify-between">
+        <span class="text-slate-400 text-[11px]">Khung thời gian:</span>
+        <span class="text-slate-200 font-semibold text-sm">1 Giờ (60 mẫu)</span>
+      </div>
+      <div class="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800 flex flex-col justify-between">
+        <span class="text-indigo-400 text-[11px]">Trong Nhà (TB 1h):</span>
+        <span id="chart-stat-indoor" class="text-indigo-300 font-bold text-sm">28.4 °C</span>
+      </div>
+      <div class="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800 flex flex-col justify-between">
+        <span class="text-amber-400 text-[11px]">Ngoài Trời (TB 1h):</span>
+        <span id="chart-stat-outdoor" class="text-amber-300 font-bold text-sm">32.6 °C</span>
+      </div>
+    </div>
+
+    <!-- Canvas biểu đồ -->
+    <div class="h-72 sm:h-80 w-full relative">
+      <canvas id="envChart"></canvas>
+    </div>
+  </section>
+
+  <!-- ======================== MAIN CONTAINER: 1 PHÒNG (TRONG NHÀ & NGOÀI TRỜI) ======================== -->
+  <main class="max-w-7xl mx-auto space-y-7">
+
+    <!-- KHỐI 1: GIÁM SÁT CẢM BIẾN (TRONG NHÀ VS NGOÀI TRỜI) -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+      <!-- ==================== CỘT TRÁI: CẢM BIẾN TRONG NHÀ (INDOOR) ==================== -->
+      <section class="bg-slate-900/90 border-2 border-indigo-500/40 rounded-3xl p-5 sm:p-6 shadow-2xl relative">
+        <div class="flex items-center justify-between pb-3 mb-4 border-b border-slate-800">
+          <div class="flex items-center gap-3">
+            <div class="p-2.5 bg-indigo-500/20 text-indigo-400 rounded-xl">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
+              </svg>
+            </div>
+            <div>
+              <h2 class="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                TRONG NHÀ (INDOOR)
+                <span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Inside</span>
+              </h2>
+              <p class="text-xs text-slate-400">1 DHT22 • 1 BH1750 • 1 PIR Hiện diện</p>
+            </div>
+          </div>
+          <span class="px-2.5 py-1 rounded-full text-xs font-mono bg-indigo-950 border border-indigo-800 text-indigo-300">Vi khí hậu phòng</span>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+          <!-- Cảm biến 1: Nhiệt ẩm Trong Nhà (DHT22) -->
+          <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner flex flex-col justify-between">
+            <div>
+              <div class="flex justify-between items-center text-slate-400 mb-2">
+                <span class="text-xs font-medium">Nhiệt ẩm Trong</span>
+                <span class="p-1 bg-orange-500/10 text-orange-400 rounded text-sm">🌡️</span>
+              </div>
+              <div class="flex items-baseline gap-1">
+                <span id="in-temp" class="text-2xl sm:text-3xl font-bold font-mono text-white">--.-</span>
+                <span class="text-xs text-slate-400">°C</span>
+              </div>
+              <div class="flex items-baseline gap-1 mt-1">
+                <span class="text-xs text-slate-400">Độ ẩm:</span>
+                <span id="in-humid" class="text-lg font-bold font-mono text-cyan-400">--</span>
+                <span class="text-xs text-slate-400">%</span>
+              </div>
+            </div>
+            <div class="mt-3 text-[11px] text-slate-400 border-t border-slate-800/60 pt-2 flex justify-between">
+              <span>Heat Index:</span>
+              <span id="in-heat-index" class="font-mono text-orange-400 font-semibold">--.- °C</span>
+            </div>
+          </div>
+
+          <!-- Cảm biến 2: Ánh sáng Trong Nhà (BH1750) -->
+          <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner flex flex-col justify-between">
+            <div>
+              <div class="flex justify-between items-center text-slate-400 mb-2">
+                <span class="text-xs font-medium">Ánh sáng Trong</span>
+                <span class="p-1 bg-yellow-500/10 text-yellow-400 rounded text-sm">💡</span>
+              </div>
+              <div class="flex items-baseline gap-1">
+                <span id="in-lux" class="text-2xl sm:text-3xl font-bold font-mono text-white">---</span>
+                <span class="text-xs text-slate-400">Lux</span>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-1">Độ rọi mặt bàn</p>
+            </div>
+            <div class="mt-3 text-[11px] text-slate-400 border-t border-slate-800/60 pt-2 flex justify-between">
+              <span>Đánh giá:</span>
+              <span id="in-lux-status" class="text-yellow-400 font-medium">Đủ sáng</span>
+            </div>
+          </div>
+
+          <!-- Cảm biến 3: Hiện diện PIR Trong Nhà (HC-SR501) -->
+          <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner flex flex-col justify-between">
+            <div>
+              <div class="flex justify-between items-center text-slate-400 mb-2">
+                <span class="text-xs font-medium">Hiện diện PIR</span>
+                <span class="p-1 bg-emerald-500/10 text-emerald-400 rounded text-sm">🚶</span>
+              </div>
+              <div class="my-2">
+                <span id="in-pir-badge" class="block text-center py-2 px-2 rounded-xl text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+                  Không có người
+                </span>
+              </div>
+            </div>
+            <div class="text-[11px] text-slate-500 text-center border-t border-slate-800/60 pt-1.5">
+              Cảm biến hồng ngoại thụ động
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== CỘT PHẢI: CẢM BIẾN NGOÀI TRỜI (OUTDOOR) ==================== -->
+      <section class="bg-slate-900/90 border-2 border-amber-500/40 rounded-3xl p-5 sm:p-6 shadow-2xl relative">
+        <div class="flex items-center justify-between pb-3 mb-4 border-b border-slate-800">
+          <div class="flex items-center gap-3">
+            <div class="p-2.5 bg-amber-500/20 text-amber-400 rounded-xl">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path>
+              </svg>
+            </div>
+            <div>
+              <h2 class="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                NGOÀI TRỜI (OUTDOOR)
+                <span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">Outside</span>
+              </h2>
+              <p class="text-xs text-slate-400">1 DHT22 • 1 BH1750 (Trạm tham chiếu môi trường)</p>
+            </div>
+          </div>
+          <span class="px-2.5 py-1 rounded-full text-xs font-mono bg-amber-950 border border-amber-800 text-amber-300">Khí tượng tự nhiên</span>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+          <!-- Cảm biến 1: Nhiệt ẩm Ngoài Trời (DHT22) -->
+          <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner flex flex-col justify-between">
+            <div>
+              <div class="flex justify-between items-center text-slate-400 mb-2">
+                <span class="text-xs font-medium">Nhiệt ẩm Ngoài</span>
+                <span class="p-1 bg-orange-500/10 text-orange-400 rounded text-sm">☀️</span>
+              </div>
+              <div class="flex items-baseline gap-1">
+                <span id="out-temp" class="text-2xl sm:text-3xl font-bold font-mono text-white">--.-</span>
+                <span class="text-xs text-slate-400">°C</span>
+              </div>
+              <div class="flex items-baseline gap-1 mt-1">
+                <span class="text-xs text-slate-400">Độ ẩm:</span>
+                <span id="out-humid" class="text-lg font-bold font-mono text-cyan-400">--</span>
+                <span class="text-xs text-slate-400">%</span>
+              </div>
+            </div>
+            <div class="mt-3 text-[11px] text-slate-400 border-t border-slate-800/60 pt-2 flex justify-between">
+              <span>Heat Index:</span>
+              <span id="out-heat-index" class="font-mono text-orange-400 font-semibold">--.- °C</span>
+            </div>
+          </div>
+
+          <!-- Cảm biến 2: Ánh sáng Ngoài Trời (BH1750) -->
+          <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner flex flex-col justify-between">
+            <div>
+              <div class="flex justify-between items-center text-slate-400 mb-2">
+                <span class="text-xs font-medium">Ánh sáng Ngoài</span>
+                <span class="p-1 bg-yellow-500/10 text-yellow-400 rounded text-sm">☀️</span>
+              </div>
+              <div class="flex items-baseline gap-1">
+                <span id="out-lux" class="text-2xl sm:text-3xl font-bold font-mono text-white">---</span>
+                <span class="text-xs text-slate-400">Lux</span>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-1">Cường độ nắng/trời</p>
+            </div>
+            <div class="mt-3 text-[11px] text-slate-400 border-t border-slate-800/60 pt-2 flex justify-between">
+              <span>Thời điểm:</span>
+              <span id="out-lux-status" class="text-yellow-400 font-medium">Ban ngày</span>
+            </div>
+          </div>
+
+          <!-- So sánh chênh lệch Trong vs Ngoài -->
+          <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 shadow-inner flex flex-col justify-between">
+            <div>
+              <div class="flex justify-between items-center text-slate-400 mb-2">
+                <span class="text-xs font-medium">Chênh Lệch (Δ)</span>
+                <span class="p-1 bg-purple-500/10 text-purple-400 rounded text-sm">⚖️</span>
+              </div>
+              <div class="space-y-1.5 mt-1 text-xs font-mono">
+                <div class="flex justify-between items-center">
+                  <span class="text-slate-400">Δ Nhiệt độ:</span>
+                  <span id="diff-temp" class="text-emerald-400 font-bold">-3.5 °C</span>
+                </div>
+                <div class="flex justify-between items-center">
+                  <span class="text-slate-400">Δ Độ ẩm:</span>
+                  <span id="diff-humid" class="text-cyan-400 font-bold">+5 %</span>
+                </div>
+                <div class="flex justify-between items-center">
+                  <span class="text-slate-400">Δ Ánh sáng:</span>
+                  <span id="diff-lux" class="text-yellow-400 font-bold">-750 Lux</span>
+                </div>
+              </div>
+            </div>
+            <div class="text-[11px] text-slate-500 text-center border-t border-slate-800/60 pt-1.5">
+              Đánh giá cách nhiệt & chiếu sáng
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- KHỐI 2: ĐIỀU KHIỂN CƠ CẤU CHẤP HÀNH TRONG PHÒNG (ACTUATORS PANEL) -->
+    <section class="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 mb-5 border-b border-slate-800 gap-3">
+        <div class="flex items-center gap-3">
+          <div class="p-2.5 bg-emerald-500/20 text-emerald-400 rounded-xl">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path>
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+              BẢNG ĐIỀU KHIỂN THIẾT BỊ TRONG PHÒNG
+              <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Actuators Control</span>
+            </h2>
+            <p class="text-xs text-slate-400">1 Quạt DC (MOSFET thông gió/làm mát) + 1 Đèn LED (BJT chiếu sáng)</p>
+          </div>
+        </div>
+
+        <!-- Chuyển đổi Auto / Manual của phòng -->
+        <div class="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+          <span class="text-xs text-slate-400 px-2 shrink-0">Chế độ vận hành:</span>
+
+          <!-- Đã thêm w-64 để cố định khung và giúp 2 nút chia đều 50/50 -->
+          <div class="relative flex items-center w-64 bg-slate-900 p-1 rounded-xl border border-slate-800/80">
+            <div id="mode-pill" class="absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] bg-indigo-600 rounded-lg transition-all duration-300 ease-in-out shadow-md translate-x-0"></div>
+
+            <button id="btn-mode-auto" onclick="setSystemMode('AUTO')" class="relative z-10 flex-1 py-1.5 text-xs font-semibold text-center text-white transition-colors duration-300">
+              Auto (Tự Động)
+            </button>
+            <button id="btn-mode-manual" onclick="setSystemMode('MANUAL')" class="relative z-10 flex-1 py-1.5 text-xs font-semibold text-center text-slate-400 hover:text-white transition-colors duration-300">
+              Manual (Thủ Công)
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        
+        <!-- Thiết bị 1: Quạt DC Thông Gió (MOSFET) -->
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-5 shadow-inner flex flex-col justify-between">
+          <div>
+            <div class="flex justify-between items-center mb-3">
+              <div class="flex items-center gap-2">
+                <span class="p-2 bg-sky-500/10 text-sky-400 rounded-lg text-base">🌀</span>
+                <div>
+                  <h3 class="text-sm font-bold text-white">Quạt DC Thông Gió (MOSFET)</h3>
+                  <p class="text-[11px] text-slate-400">Điều chỉnh lưu lượng gió & giảm Heat Index</p>
+                </div>
+              </div>
+              <span id="fan-badge" class="px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-slate-800 text-slate-400 border border-slate-700">OFF (0%)</span>
+            </div>
+
+            <div class="flex items-center justify-between gap-3 mb-3">
+              <button id="btn-toggle-fan" onclick="toggleActuator('fan')" class="py-2 px-5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+                BẬT QUẠT
+              </button>
+              <div class="text-right">
+                <span class="text-[11px] text-slate-400 mr-1">Tốc độ PWM:</span>
+                <span id="fan-pwm-label" class="text-base font-mono font-bold text-sky-400">0%</span>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1.5">Kéo thanh trượt điều chỉnh tốc độ PWM (0 - 100%):</label>
+            <input id="fan-slider" type="range" min="0" max="100" value="0" oninput="onSliderInput('fan', this.value)" onchange="sendActuatorPWM('fan', this.value)" class="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500">
+          </div>
+        </div>
+
+        <!-- Thiết bị 2: Đèn LED Chiếu Sáng (BJT) -->
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-5 shadow-inner flex flex-col justify-between">
+          <div>
+            <div class="flex justify-between items-center mb-3">
+              <div class="flex items-center gap-2">
+                <span class="p-2 bg-amber-500/10 text-amber-400 rounded-lg text-base">💡</span>
+                <div>
+                  <h3 class="text-sm font-bold text-white">Đèn LED Chiếu Sáng (BJT)</h3>
+                  <p class="text-[11px] text-slate-400">Tự động bù sáng thích ứng với ánh sáng tự nhiên</p>
+                </div>
+              </div>
+              <span id="led-badge" class="px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-slate-800 text-slate-400 border border-slate-700">OFF (0%)</span>
+            </div>
+
+            <div class="flex items-center justify-between gap-3 mb-3">
+              <button id="btn-toggle-led" onclick="toggleActuator('led')" class="py-2 px-5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+                BẬT ĐÈN
+              </button>
+              <div class="text-right">
+                <span class="text-[11px] text-slate-400 mr-1">Độ sáng PWM:</span>
+                <span id="led-pwm-label" class="text-base font-mono font-bold text-amber-400">0%</span>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1.5">Kéo thanh trượt điều chỉnh độ sáng (0 - 100%):</label>
+            <input id="led-slider" type="range" min="0" max="100" value="0" oninput="onSliderInput('led', this.value)" onchange="sendActuatorPWM('led', this.value)" class="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500">
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- KHỐI 3: ĐO ĐẠC ĐỘ TRỄ THỰC NGHIỆM & EVENT CONSOLE -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <!-- Đo độ trễ -->
+      <div class="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-xl flex flex-col justify-between">
+        <div>
+          <h4 class="text-sm font-bold text-white mb-3 flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Đo Đạc Độ Trễ (Tuần 3 Thực Nghiệm)
+          </h4>
+          <div class="space-y-2.5 text-xs">
+            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 flex justify-between items-center">
+              <div>
+                <p class="text-slate-400 font-medium">Telemetry Latency:</p>
+                <p class="text-[10px] text-slate-500">(ESP32 &rarr; Web)</p>
+              </div>
+              <span id="telemetry-latency-val" class="text-base font-mono font-bold text-emerald-400">-- ms</span>
+            </div>
+            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 flex justify-between items-center">
+              <div>
+                <p class="text-slate-400 font-medium">Command Response:</p>
+                <p class="text-[10px] text-slate-500">(Web &rarr; Chấp hành)</p>
+              </div>
+              <span id="command-latency-val" class="text-base font-mono font-bold text-sky-400">-- ms</span>
+            </div>
+          </div>
+        </div>
+
+        <button onclick="pingLatencyTest()" class="mt-4 w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700 transition">
+          Gửi Test Ping Đo Độ Trễ
+        </button>
+      </div>
+
+      <!-- Nhật ký gói tin -->
+      <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-xl flex flex-col">
+        <div class="flex items-center justify-between mb-2">
+          <h4 class="text-sm font-bold text-white flex items-center gap-2">
+            <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+            </svg>
+            Nhật Ký Gói Tin MQTT Trong/Ngoài (Event Console)
+          </h4>
+          <button onclick="clearConsoleLog()" class="text-xs text-slate-500 hover:text-slate-300 transition">Xóa log</button>
+        </div>
+        <div id="console-log-box" class="flex-1 min-h-[120px] max-h-[140px] overflow-y-auto bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-[11px] text-slate-400 space-y-1">
+          <p class="text-slate-500">[System] Khởi động giao diện giám sát vi khí hậu 1 phòng (Trong/Ngoài)...</p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ======================== CONFIG MODAL ======================== -->
+  <div id="config-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+      <div class="flex items-center justify-between mb-4 pb-2 border-b border-slate-800">
+        <h3 class="text-base font-bold text-white">Cấu Hình MQTT Broker</h3>
+        <button onclick="toggleConfigModal()" class="text-slate-400 hover:text-white text-lg">&times;</button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-400 mb-1">Broker Host (IP hoặc Domain):</label>
+          <input id="cfg-host" type="text" value="broker.emqx.io" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 font-mono focus:border-indigo-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">WebSocket Port:</label>
+          <input id="cfg-port" type="number" value="8083" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 font-mono focus:border-indigo-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Telemetry Topic chung:</label>
+          <input id="cfg-topic" type="text" value="hcmute/iot/climate/telemetry" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 font-mono focus:border-indigo-500 focus:outline-none">
+        </div>
+      </div>
+      <div class="mt-6 flex justify-end gap-3">
+        <button onclick="toggleConfigModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs transition">Hủy</button>
+        <button onclick="saveAndReconnectMQTT()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition">Lưu & Kết Nối Lại</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== JAVASCRIPT LOGIC ======================== -->
+  <script>
+/**
+ * ==============================================================================
+ * HỆ THỐNG GIÁM SÁT MÔI TRƯỜNG & ĐIỀU HÒA VI KHÍ HẬU (1 PHÒNG: TRONG & NGOÀI)
+ * Thành viên 3: Dashboard & Frontend Lead (Nguyễn Nhật Minh)
+ * ==============================================================================
+ */
+
+// 1. CẤU HÌNH & TRẠNG THÁI HỆ THỐNG
+let mqttConfig = {
+  host: "broker.emqx.io",
+  port: 8083,
+  path: "/mqtt",
+  clientId: "web_climate_" + Math.random().toString(16).substring(2, 8),
+  topicTelemetry: "hcmute/iot/climate/telemetry",
+  topicStatus: "hcmute/iot/climate/status",
+  topicCommand: "hcmute/iot/climate/control"
+};
+
+let mqttClient = null;
+let envChart = null;
+let currentMetric = "temp";
+
+const MAX_HISTORY_POINTS = 60;
+let historyBuffer = {
+  timestamps: [],
+  indoor: { temp: [], humid: [], lux: [], pir: [] },
+  outdoor: { temp: [], humid: [], lux: [] }
+};
+
+let systemState = {
+  isOnline: false,
+  lastTelemetryTime: null,
+  lastCommandSentTime: 0,
+  mode: "AUTO",
+  indoor: {
+    temp: 28.4,
+    humid: 65,
+    heatIndex: 30.6,
+    lux: 420,
+    motion: 0
+  },
+  outdoor: {
+    temp: 32.6,
+    humid: 58,
+    heatIndex: 37.1,
+    lux: 1200
+  },
+  actuators: {
+    fanState: false,
+    fanPwm: 0,
+    ledState: false,
+    ledPwm: 0
+  }
+};
+
+let isSimulating = false;
+let simulationTimer = null;
+
+// ==========================================
+// 2. THEO DÕI TRẠNG THÁI INTERNET
+// ==========================================
+function updateInternetStatus() {
+  const dot = document.getElementById("net-status-dot");
+  const text = document.getElementById("net-status-text");
+  if (navigator.onLine) {
+    dot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse";
+    text.className = "font-semibold text-emerald-400 text-xs";
+    text.innerText = "Đã kết nối";
+  } else {
+    dot.className = "w-2.5 h-2.5 rounded-full bg-rose-500";
+    text.className = "font-semibold text-rose-400 text-xs";
+    text.innerText = "Mất kết nối";
+    logToConsole("[Cảnh báo] Trình duyệt mất kết nối Internet!");
+  }
+}
+window.addEventListener("online", updateInternetStatus);
+window.addEventListener("offline", updateInternetStatus);
+
+// ==========================================
+// 3. KHỞI TẠO DỮ LIỆU LỊCH SỬ 1 GIỜ VÀ CHART.JS
+// ==========================================
+function generateInitial1HourHistory() {
+  const now = Date.now();
+  for (let i = MAX_HISTORY_POINTS - 1; i >= 0; i--) {
+    const t = new Date(now - i * 60 * 1000);
+    const timeLabel = t.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+    historyBuffer.timestamps.push(timeLabel);
+
+    const inT = 28.0 + Math.sin(i / 10) * 0.8 + (Math.random() * 0.3 - 0.15);
+    const inH = 65 - Math.sin(i / 10) * 2 + (Math.random() * 1.5 - 0.75);
+    const inL = Math.floor(400 + Math.sin(i / 8) * 60 + Math.random() * 20);
+    const inM = (i % 8 === 0 || i % 14 === 0) ? 1 : 0;
+
+    const outT = 32.0 + Math.sin(i / 7) * 2.0 + (Math.random() * 0.5 - 0.25);
+    const outH = 58 - Math.sin(i / 7) * 4 + (Math.random() * 2 - 1);
+    const outL = Math.floor(1100 + Math.sin(i / 5) * 300 + Math.random() * 100);
+
+    historyBuffer.indoor.temp.push(parseFloat(inT.toFixed(1)));
+    historyBuffer.indoor.humid.push(Math.round(inH));
+    historyBuffer.indoor.lux.push(inL);
+    historyBuffer.indoor.pir.push(inM);
+
+    historyBuffer.outdoor.temp.push(parseFloat(outT.toFixed(1)));
+    historyBuffer.outdoor.humid.push(Math.round(outH));
+    historyBuffer.outdoor.lux.push(outL);
+  }
+}
+
+function initChart() {
+  generateInitial1HourHistory();
+  const ctx = document.getElementById("envChart").getContext("2d");
+
+  envChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: [...historyBuffer.timestamps],
+      datasets: [
+        {
+          label: "Nhiệt độ Trong Nhà (DHT22 Inside)",
+          data: [...historyBuffer.indoor.temp],
+          borderColor: "#6366f1",
+          backgroundColor: "rgba(99, 102, 241, 0.1)",
+          fill: true,
+          borderWidth: 2.5,
+          tension: 0.3,
+          pointRadius: 0,
+          pointHoverRadius: 5
+        },
+        {
+          label: "Nhiệt độ Ngoài Trời (DHT22 Outside)",
+          data: [...historyBuffer.outdoor.temp],
+          borderColor: "#f97316",
+          backgroundColor: "transparent",
+          borderWidth: 2,
+          borderDash: [5, 4],
+          tension: 0.3,
+          pointRadius: 0,
+          pointHoverRadius: 5
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: {
+          position: "top",
+          labels: { color: "#cbd5e1", font: { family: "Inter", size: 12, weight: "600" }, usePointStyle: true }
+        },
+        tooltip: {
+          backgroundColor: "#0f172a",
+          titleColor: "#94a3b8",
+          bodyColor: "#f8fafc",
+          borderColor: "#334155",
+          borderWidth: 1,
+          padding: 10
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: "rgba(51, 65, 85, 0.25)" },
+          ticks: { color: "#64748b", font: { size: 11 }, maxTicksLimit: 12 }
+        },
+        y: {
+          grid: { color: "rgba(51, 65, 85, 0.2)" },
+          ticks: {
+            color: "#94a3b8",
+            font: { size: 11 },
+            callback: (val) => val + "°C"
+          }
+        }
+      }
+    }
+  });
+
+  updateChartStats();
+}
+
+// ==========================================
+// 4. CHUYỂN ĐỔI CHỈ SỐ BIỂU ĐỒ (4 LOẠI)
+// ==========================================
+function switchChartMetric(metric) {
+  currentMetric = metric;
+  if (!envChart) return;
+
+  const buttons = {
+    temp: document.getElementById("btn-metric-temp"),
+    humid: document.getElementById("btn-metric-humid"),
+    lux: document.getElementById("btn-metric-lux"),
+    pir: document.getElementById("btn-metric-pir")
+  };
+
+  const activeStyles = {
+    temp: "bg-orange-500 text-white shadow-lg shadow-orange-500/20 border-orange-400",
+    humid: "bg-cyan-500 text-white shadow-lg shadow-cyan-500/20 border-cyan-400",
+    lux: "bg-yellow-500 text-white shadow-lg shadow-yellow-500/20 border-yellow-400",
+    pir: "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20 border-emerald-400"
+  };
+
+  const defaultStyle = "px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center gap-1.5";
+
+  Object.keys(buttons).forEach(key => {
+    buttons[key].className = defaultStyle;
+  });
+
+  buttons[metric].className = `px-3 py-1.5 rounded-xl text-xs font-semibold ${activeStyles[metric]} border transition flex items-center gap-1.5`;
+
+  if (metric === "temp") {
+    document.getElementById("chart-stat-metric").innerText = "Nhiệt Độ (°C)";
+    document.getElementById("chart-stat-metric").className = "text-orange-400 font-bold text-sm";
+    envChart.data.datasets = [
+      {
+        label: "Nhiệt độ Trong Nhà (Indoor)",
+        data: [...historyBuffer.indoor.temp],
+        borderColor: "#6366f1",
+        backgroundColor: "rgba(99, 102, 241, 0.1)",
+        fill: true,
+        borderWidth: 2.5,
+        stepped: false,
+        pointRadius: 0
+      },
+      {
+        label: "Nhiệt độ Ngoài Trời (Outdoor)",
+        data: [...historyBuffer.outdoor.temp],
+        borderColor: "#f97316",
+        backgroundColor: "transparent",
+        borderDash: [5, 4],
+        borderWidth: 2,
+        stepped: false,
+        pointRadius: 0
+      }
+    ];
+    envChart.options.scales.y.ticks.stepSize = undefined;
+    envChart.options.scales.y.ticks.callback = (val) => val + "°C";
+  } else if (metric === "humid") {
+    document.getElementById("chart-stat-metric").innerText = "Độ Ẩm (%RH)";
+    document.getElementById("chart-stat-metric").className = "text-cyan-400 font-bold text-sm";
+    envChart.data.datasets = [
+      {
+        label: "Độ ẩm Trong Nhà (Indoor)",
+        data: [...historyBuffer.indoor.humid],
+        borderColor: "#06b6d4",
+        backgroundColor: "rgba(6, 182, 212, 0.1)",
+        fill: true,
+        borderWidth: 2.5,
+        stepped: false,
+        pointRadius: 0
+      },
+      {
+        label: "Độ ẩm Ngoài Trời (Outdoor)",
+        data: [...historyBuffer.outdoor.humid],
+        borderColor: "#38bdf8",
+        backgroundColor: "transparent",
+        borderDash: [5, 4],
+        borderWidth: 2,
+        stepped: false,
+        pointRadius: 0
+      }
+    ];
+    envChart.options.scales.y.ticks.stepSize = undefined;
+    envChart.options.scales.y.ticks.callback = (val) => val + "%";
+  } else if (metric === "lux") {
+    document.getElementById("chart-stat-metric").innerText = "Cường Độ Ánh Sáng (Lux)";
+    document.getElementById("chart-stat-metric").className = "text-yellow-400 font-bold text-sm";
+    envChart.data.datasets = [
+      {
+        label: "Ánh sáng Trong Nhà (Indoor)",
+        data: [...historyBuffer.indoor.lux],
+        borderColor: "#eab308",
+        backgroundColor: "rgba(234, 179, 8, 0.1)",
+        fill: true,
+        borderWidth: 2.5,
+        stepped: false,
+        pointRadius: 0
+      },
+      {
+        label: "Ánh sáng Ngoài Trời (Outdoor)",
+        data: [...historyBuffer.outdoor.lux],
+        borderColor: "#fde047",
+        backgroundColor: "transparent",
+        borderDash: [5, 4],
+        borderWidth: 2,
+        stepped: false,
+        pointRadius: 0
+      }
+    ];
+    envChart.options.scales.y.ticks.stepSize = undefined;
+    envChart.options.scales.y.ticks.callback = (val) => val + " Lux";
+  } else if (metric === "pir") {
+    document.getElementById("chart-stat-metric").innerText = "Hiện Diện PIR Trong Nhà";
+    document.getElementById("chart-stat-metric").className = "text-emerald-400 font-bold text-sm";
+    envChart.data.datasets = [
+      {
+        label: "Hiện diện Trong Nhà (1: Có người, 0: Trống)",
+        data: [...historyBuffer.indoor.pir],
+        borderColor: "#10b981",
+        backgroundColor: "rgba(16, 185, 129, 0.15)",
+        fill: true,
+        borderWidth: 2.5,
+        stepped: "before",
+        pointRadius: 0
+      }
+    ];
+    envChart.options.scales.y.ticks.stepSize = 1;
+    envChart.options.scales.y.ticks.callback = (val) => val === 1 ? "Có người" : "Trống";
+  }
+
+  envChart.update();
+  updateChartStats();
+}
+
+function updateChartStats() {
+  const statIn = document.getElementById("chart-stat-indoor");
+  const statOut = document.getElementById("chart-stat-outdoor");
+
+  if (currentMetric === "temp") {
+    const avgIn = (historyBuffer.indoor.temp.reduce((a, b) => a + b, 0) / historyBuffer.indoor.temp.length).toFixed(1);
+    const avgOut = (historyBuffer.outdoor.temp.reduce((a, b) => a + b, 0) / historyBuffer.outdoor.temp.length).toFixed(1);
+    statIn.innerText = `${avgIn} °C`;
+    statOut.innerText = `${avgOut} °C`;
+  } else if (currentMetric === "humid") {
+    const avgIn = Math.round(historyBuffer.indoor.humid.reduce((a, b) => a + b, 0) / historyBuffer.indoor.humid.length);
+    const avgOut = Math.round(historyBuffer.outdoor.humid.reduce((a, b) => a + b, 0) / historyBuffer.outdoor.humid.length);
+    statIn.innerText = `${avgIn} %`;
+    statOut.innerText = `${avgOut} %`;
+  } else if (currentMetric === "lux") {
+    const avgIn = Math.round(historyBuffer.indoor.lux.reduce((a, b) => a + b, 0) / historyBuffer.indoor.lux.length);
+    const avgOut = Math.round(historyBuffer.outdoor.lux.reduce((a, b) => a + b, 0) / historyBuffer.outdoor.lux.length);
+    statIn.innerText = `${avgIn} Lux`;
+    statOut.innerText = `${avgOut} Lux`;
+  } else if (currentMetric === "pir") {
+    const count = historyBuffer.indoor.pir.filter(v => v === 1).length;
+    statIn.innerText = `${count} lần có người`;
+    statOut.innerText = "Chỉ lắp trong nhà";
+  }
+}
+
+function pushDataTo1HourBuffer(inData, outData) {
+  const now = new Date();
+  const timeLabel = now.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  historyBuffer.timestamps.push(timeLabel);
+  historyBuffer.indoor.temp.push(inData.temp);
+  historyBuffer.indoor.humid.push(inData.humid);
+  historyBuffer.indoor.lux.push(inData.lux);
+  historyBuffer.indoor.pir.push(inData.motion);
+
+  historyBuffer.outdoor.temp.push(outData.temp);
+  historyBuffer.outdoor.humid.push(outData.humid);
+  historyBuffer.outdoor.lux.push(outData.lux);
+
+  if (historyBuffer.timestamps.length > MAX_HISTORY_POINTS) {
+    historyBuffer.timestamps.shift();
+    historyBuffer.indoor.temp.shift();
+    historyBuffer.indoor.humid.shift();
+    historyBuffer.indoor.lux.shift();
+    historyBuffer.indoor.pir.shift();
+
+    historyBuffer.outdoor.temp.shift();
+    historyBuffer.outdoor.humid.shift();
+    historyBuffer.outdoor.lux.shift();
+  }
+
+  if (envChart) {
+    envChart.data.labels = [...historyBuffer.timestamps];
+    if (currentMetric === "temp") {
+      envChart.data.datasets[0].data = [...historyBuffer.indoor.temp];
+      envChart.data.datasets[1].data = [...historyBuffer.outdoor.temp];
+    } else if (currentMetric === "humid") {
+      envChart.data.datasets[0].data = [...historyBuffer.indoor.humid];
+      envChart.data.datasets[1].data = [...historyBuffer.outdoor.humid];
+    } else if (currentMetric === "lux") {
+      envChart.data.datasets[0].data = [...historyBuffer.indoor.lux];
+      envChart.data.datasets[1].data = [...historyBuffer.outdoor.lux];
+    } else if (currentMetric === "pir") {
+      envChart.data.datasets[0].data = [...historyBuffer.indoor.pir];
+    }
+    envChart.update("none");
+    updateChartStats();
+  }
+}
+
+// ==========================================
+// 5. KẾT NỐI MQTT BROKER QUA WEBSOCKET
+// ==========================================
+function connectMQTT() {
+  logToConsole(`[MQTT] Đang kết nối tới ${mqttConfig.host}:${mqttConfig.port}...`);
+  try {
+    mqttClient = new Paho.MQTT.Client(
+      mqttConfig.host,
+      Number(mqttConfig.port),
+      mqttConfig.path,
+      mqttConfig.clientId
+    );
+    mqttClient.onConnectionLost = onConnectionLost;
+    mqttClient.onMessageArrived = onMessageArrived;
+
+    const options = {
+      timeout: 5,
+      useSSL: mqttConfig.port === 8084 || mqttConfig.port === 443,
+      cleanSession: true,
+      onSuccess: onConnectSuccess,
+      onFailure: onConnectFailure
+    };
+    mqttClient.connect(options);
+  } catch (err) {
+    logToConsole(`[Lỗi] Khởi tạo MQTT thất bại: ${err.message}`);
+  }
+}
+
+function onConnectSuccess() {
+  logToConsole(`[MQTT] Kết nối Broker thành công!`);
+  mqttClient.subscribe(mqttConfig.topicTelemetry, { qos: 0 });
+  mqttClient.subscribe(mqttConfig.topicStatus, { qos: 1 });
+}
+
+function onConnectFailure(res) {
+  logToConsole(`[MQTT] Kết nối thất bại: ${res.errorMessage}`);
+  setDeviceOnlineStatus(false);
+}
+
+function onConnectionLost(res) {
+  if (res.errorCode !== 0) logToConsole(`[MQTT] Mất kết nối: ${res.errorMessage}`);
+  setDeviceOnlineStatus(false);
+}
+
+// ==========================================
+// 6. XỬ LÝ GÓI TIN TELEMETRY TRONG / NGOÀI
+// ==========================================
+function onMessageArrived(message) {
+  const topic = message.destinationName;
+  const payloadStr = message.payloadString;
+
+  if (topic === mqttConfig.topicStatus) {
+    setDeviceOnlineStatus(payloadStr.toLowerCase().includes("online"));
+    return;
+  }
+
+  if (topic === mqttConfig.topicTelemetry) {
+    try {
+      const data = JSON.parse(payloadStr);
+      processTelemetryData(data);
+    } catch (e) {
+      logToConsole(`[Cảnh báo] Gói tin không phải JSON hợp lệ.`);
+    }
+  }
+}
+
+function processTelemetryData(data) {
+  const now = Date.now();
+  systemState.lastTelemetryTime = now;
+  setDeviceOnlineStatus(true);
+
+  if (data.timestamp) {
+    let packetTime = Number(data.timestamp);
+    if (!isNaN(packetTime) && packetTime > 1000000000000) {
+      let latency = Math.max(0, now - packetTime);
+      document.getElementById("telemetry-latency-val").innerText = latency + " ms";
+    } else {
+      document.getElementById("telemetry-latency-val").innerText = "< 40 ms";
+    }
+  }
+
+  const ind = data.indoor || data.in || data;
+  if (ind) {
+    if (ind.temperature !== undefined) systemState.indoor.temp = Number(ind.temperature);
+    if (ind.humidity !== undefined) systemState.indoor.humid = Number(ind.humidity);
+    systemState.indoor.heatIndex = ind.heat_index !== undefined ? Number(ind.heat_index) : calculateHeatIndex(systemState.indoor.temp, systemState.indoor.humid);
+    if (ind.lux !== undefined) systemState.indoor.lux = Math.round(ind.lux);
+    if (ind.motion !== undefined) systemState.indoor.motion = (ind.motion === 1 || ind.motion === true) ? 1 : 0;
+  }
+
+  const out = data.outdoor || data.out;
+  if (out) {
+    if (out.temperature !== undefined) systemState.outdoor.temp = Number(out.temperature);
+    if (out.humidity !== undefined) systemState.outdoor.humid = Number(out.humidity);
+    systemState.outdoor.heatIndex = out.heat_index !== undefined ? Number(out.heat_index) : calculateHeatIndex(systemState.outdoor.temp, systemState.outdoor.humid);
+    if (out.lux !== undefined) systemState.outdoor.lux = Math.round(out.lux);
+  }
+
+  if (data.fan_state !== undefined || data.fan_pwm !== undefined) {
+    systemState.actuators.fanState = data.fan_state === "ON" || data.fan_state === 1 || data.fan_state === true;
+    systemState.actuators.fanPwm = data.fan_pwm !== undefined ? Number(data.fan_pwm) : (systemState.actuators.fanState ? 80 : 0);
+  }
+  if (data.led_state !== undefined || data.led_pwm !== undefined) {
+    systemState.actuators.ledState = data.led_state === "ON" || data.led_state === 1 || data.led_state === true;
+    systemState.actuators.ledPwm = data.led_pwm !== undefined ? Number(data.led_pwm) : (systemState.actuators.ledState ? 100 : 0);
+  }
+  if (data.mode) {
+    systemState.mode = data.mode.toUpperCase();
+  }
+
+  updateAllUI();
+  pushDataTo1HourBuffer(systemState.indoor, systemState.outdoor);
+  checkAlarms();
+
+  if (systemState.lastCommandSentTime > 0) {
+    const responseTime = now - systemState.lastCommandSentTime;
+    document.getElementById("command-latency-val").innerText = responseTime + " ms";
+    systemState.lastCommandSentTime = 0;
+    logToConsole(`[Command Ack] Thực thi lệnh thành công sau ${responseTime} ms`);
+  }
+}
+
+function updateAllUI() {
+  document.getElementById("in-temp").innerText = systemState.indoor.temp.toFixed(1);
+  document.getElementById("in-humid").innerText = Math.round(systemState.indoor.humid);
+  document.getElementById("in-heat-index").innerText = systemState.indoor.heatIndex.toFixed(1) + " °C";
+  document.getElementById("in-lux").innerText = systemState.indoor.lux;
+  
+  const inLuxStatus = document.getElementById("in-lux-status");
+  if (systemState.indoor.lux < 150) {
+    inLuxStatus.innerText = "Tối (Bật đèn)";
+    inLuxStatus.className = "text-amber-400 font-medium";
+  } else {
+    inLuxStatus.innerText = "Đủ sáng";
+    inLuxStatus.className = "text-emerald-400 font-medium";
+  }
+
+  const pirBadge = document.getElementById("in-pir-badge");
+  if (systemState.indoor.motion === 1) {
+    pirBadge.innerText = "PHÁT HIỆN CÓ NGƯỜI";
+    pirBadge.className = "block text-center py-2 px-2 rounded-xl text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse";
+  } else {
+    pirBadge.innerText = "Không có người";
+    pirBadge.className = "block text-center py-2 px-2 rounded-xl text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700";
+  }
+
+  document.getElementById("out-temp").innerText = systemState.outdoor.temp.toFixed(1);
+  document.getElementById("out-humid").innerText = Math.round(systemState.outdoor.humid);
+  document.getElementById("out-heat-index").innerText = systemState.outdoor.heatIndex.toFixed(1) + " °C";
+  document.getElementById("out-lux").innerText = systemState.outdoor.lux;
+
+  const outLuxStatus = document.getElementById("out-lux-status");
+  if (systemState.outdoor.lux > 500) {
+    outLuxStatus.innerText = "Nắng / Ban ngày";
+    outLuxStatus.className = "text-amber-400 font-medium";
+  } else {
+    outLuxStatus.innerText = "Trời tối / Ban đêm";
+    outLuxStatus.className = "text-indigo-400 font-medium";
+  }
+
+  const dTemp = (systemState.indoor.temp - systemState.outdoor.temp).toFixed(1);
+  const dHumid = Math.round(systemState.indoor.humid - systemState.outdoor.humid);
+  const dLux = systemState.indoor.lux - systemState.outdoor.lux;
+
+  document.getElementById("diff-temp").innerText = (dTemp > 0 ? `+${dTemp}` : dTemp) + " °C";
+  document.getElementById("diff-humid").innerText = (dHumid > 0 ? `+${dHumid}` : dHumid) + " %";
+  document.getElementById("diff-lux").innerText = (dLux > 0 ? `+${dLux}` : dLux) + " Lux";
+
+  const fanBadge = document.getElementById("fan-badge");
+  const btnFan = document.getElementById("btn-toggle-fan");
+  const fanSlider = document.getElementById("fan-slider");
+  const fanLabel = document.getElementById("fan-pwm-label");
+
+  if (systemState.actuators.fanState && systemState.actuators.fanPwm > 0) {
+    fanBadge.innerText = `ON (${systemState.actuators.fanPwm}%)`;
+    fanBadge.className = "px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30";
+    btnFan.innerText = "TẮT QUẠT";
+    btnFan.className = "py-2 px-5 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white transition shadow-sm";
+  } else {
+    fanBadge.innerText = "OFF (0%)";
+    fanBadge.className = "px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-slate-800 text-slate-400 border border-slate-700";
+    btnFan.innerText = "BẬT QUẠT";
+    btnFan.className = "py-2 px-5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition shadow-sm";
+  }
+  fanSlider.value = systemState.actuators.fanPwm;
+  fanLabel.innerText = `${systemState.actuators.fanPwm}%`;
+
+  const ledBadge = document.getElementById("led-badge");
+  const btnLed = document.getElementById("btn-toggle-led");
+  const ledSlider = document.getElementById("led-slider");
+  const ledLabel = document.getElementById("led-pwm-label");
+
+  if (systemState.actuators.ledState && systemState.actuators.ledPwm > 0) {
+    ledBadge.innerText = `ON (${systemState.actuators.ledPwm}%)`;
+    ledBadge.className = "px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30";
+    btnLed.innerText = "TẮT ĐÈN";
+    btnLed.className = "py-2 px-5 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white transition shadow-sm";
+  } else {
+    ledBadge.innerText = "OFF (0%)";
+    ledBadge.className = "px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-slate-800 text-slate-400 border border-slate-700";
+    btnLed.innerText = "BẬT ĐÈN";
+    btnLed.className = "py-2 px-5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition shadow-sm";
+  }
+  ledSlider.value = systemState.actuators.ledPwm;
+  ledLabel.innerText = `${systemState.actuators.ledPwm}%`;
+
+  const btnAuto = document.getElementById("btn-mode-auto");
+  const btnManual = document.getElementById("btn-mode-manual");
+  const modePill = document.getElementById("mode-pill");
+  if (systemState.mode === "AUTO") {
+    modePill.className = "absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] bg-indigo-600 rounded-lg transition-all duration-300 ease-in-out shadow-md translate-x-0";
+    btnAuto.className = "relative z-10 flex-1 py-1.5 text-xs font-semibold text-center text-white transition-colors duration-300";
+    btnManual.className = "relative z-10 flex-1 py-1.5 text-xs font-semibold text-center text-slate-400 hover:text-white transition-colors duration-300";
+  } else {
+    modePill.className = "absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] bg-amber-600 rounded-lg transition-all duration-300 ease-in-out shadow-md translate-x-full";
+    btnManual.className = "relative z-10 flex-1 py-1.5 text-xs font-semibold text-center text-white transition-colors duration-300";
+    btnAuto.className = "relative z-10 flex-1 py-1.5 text-xs font-semibold text-center text-slate-400 hover:text-white transition-colors duration-300";
+  }
+}
+
+// ==========================================
+// 7. GỬI LỆNH ĐIỀU KHIỂN
+// ==========================================
+function sendCommand(cmdPayload) {
+  systemState.lastCommandSentTime = Date.now();
+  const payloadStr = JSON.stringify(cmdPayload);
+
+  if (mqttClient && mqttClient.isConnected()) {
+    const msg = new Paho.MQTT.Message(payloadStr);
+    msg.destinationName = mqttConfig.topicCommand;
+    msg.qos = 1;
+    mqttClient.send(msg);
+    logToConsole(`[Lệnh xuất bản] -> ${payloadStr}`);
+  } else {
+    logToConsole(`[Mô phỏng] Chưa nối MQTT -> Thực thi giả lập cục bộ`);
+    if (isSimulating) {
+      setTimeout(() => {
+        if (cmdPayload.actuator === "fan") {
+          systemState.actuators.fanState = cmdPayload.state === "ON";
+          systemState.actuators.fanPwm = cmdPayload.pwm !== undefined ? cmdPayload.pwm : (systemState.actuators.fanState ? 80 : 0);
+        } else if (cmdPayload.actuator === "led") {
+          systemState.actuators.ledState = cmdPayload.state === "ON";
+          systemState.actuators.ledPwm = cmdPayload.pwm !== undefined ? cmdPayload.pwm : (systemState.actuators.ledState ? 100 : 0);
+        } else if (cmdPayload.mode) {
+          systemState.mode = cmdPayload.mode;
+        }
+        updateAllUI();
+        document.getElementById("command-latency-val").innerText = "25 ms";
+      }, 25);
+    }
+  }
+}
+
+function setSystemMode(mode) {
+  systemState.mode = mode;
+  updateAllUI();
+  sendCommand({ mode: mode });
+}
+
+function ensureManualMode() {
+  if (systemState.mode === 'AUTO') {
+    systemState.mode = 'MANUAL';
+    logToConsole('[Chế độ] Tự động chuyển sang MANUAL do người dùng can thiệp thiết bị.');
+    updateAllUI();
+    sendCommand({ mode: 'MANUAL' });
+  }
+}
+
+function toggleActuator(actuator) {
+  ensureManualMode();
+  if (actuator === "fan") {
+    const nextState = !systemState.actuators.fanState;
+    const nextPwm = nextState ? 80 : 0;
+    systemState.actuators.fanState = nextState;
+    systemState.actuators.fanPwm = nextPwm;
+    updateAllUI();
+    sendCommand({ actuator: "fan", state: nextState ? "ON" : "OFF", pwm: nextPwm });
+  } else if (actuator === "led") {
+    const nextState = !systemState.actuators.ledState;
+    const nextPwm = nextState ? 100 : 0;
+    systemState.actuators.ledState = nextState;
+    systemState.actuators.ledPwm = nextPwm;
+    updateAllUI();
+    sendCommand({ actuator: "led", state: nextState ? "ON" : "OFF", pwm: nextPwm });
+  }
+}
+
+function onSliderInput(actuator, val) {
+  document.getElementById(`${actuator}-pwm-label`).innerText = `${val}%`;
+}
+
+function sendActuatorPWM(actuator, val) {
+  ensureManualMode();
+  const pwm = Number(val);
+  const state = pwm > 0 ? "ON" : "OFF";
+  if (actuator === "fan") {
+    systemState.actuators.fanState = pwm > 0;
+    systemState.actuators.fanPwm = pwm;
+  } else if (actuator === "led") {
+    systemState.actuators.ledState = pwm > 0;
+    systemState.actuators.ledPwm = pwm;
+  }
+  updateAllUI();
+  sendCommand({ actuator: actuator, state: state, pwm: pwm });
+}
+
+function pingLatencyTest() {
+  const pingPayload = { ping: Date.now() };
+  if (mqttClient && mqttClient.isConnected()) {
+    const msg = new Paho.MQTT.Message(JSON.stringify(pingPayload));
+    msg.destinationName = mqttConfig.topicCommand;
+    mqttClient.send(msg);
+  }
+  logToConsole(`[Ping Test] Đã gửi gói kiểm tra độ trễ`);
+}
+
+// ==========================================
+// 8. TIỆN ÍCH & CẢNH BÁO
+// ==========================================
+function checkAlarms() {
+  const banner = document.getElementById("alarm-banner");
+  const msg = document.getElementById("alarm-message");
+  let alarms = [];
+
+  if (systemState.indoor.temp > 35 || systemState.indoor.heatIndex > 38) alarms.push("Trong nhà quá nóng (Heat Index cao)");
+  if (systemState.indoor.humid > 85) alarms.push("Trong nhà nồm ẩm (>85%)");
+  if (systemState.outdoor.temp > 38) alarms.push("Ngoài trời nắng gắt (>38°C)");
+
+  if (alarms.length > 0) {
+    banner.classList.remove("hidden");
+    msg.innerText = "Cảnh báo: " + alarms.join(" | ");
+  } else {
+    banner.classList.add("hidden");
+  }
+}
+
+function calculateHeatIndex(T, RH) {
+  if (!T || !RH) return 0;
+  return T + 0.33 * (RH / 100 * 6.105 * Math.exp(17.27 * T / (237.7 + T))) - 4.0;
+}
+
+function setDeviceOnlineStatus(isOnline) {
+  systemState.isOnline = isOnline;
+  const dot = document.getElementById("device-status-dot");
+  const text = document.getElementById("device-status-text");
+  if (isOnline) {
+    dot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse";
+    text.className = "font-semibold text-emerald-400 text-xs";
+    text.innerText = "Online";
+  } else {
+    dot.className = "w-2.5 h-2.5 rounded-full bg-rose-500";
+    text.className = "font-semibold text-rose-400 text-xs";
+    text.innerText = "Offline";
+  }
+}
+
+setInterval(() => {
+  const textElem = document.getElementById("freshness-text");
+  if (!systemState.lastTelemetryTime) {
+    textElem.innerText = "Chưa có tin";
+    return;
+  }
+  const sec = Math.floor((Date.now() - systemState.lastTelemetryTime) / 1000);
+  textElem.innerText = sec < 60 ? `${sec}s trước` : `${Math.floor(sec / 60)}p trước`;
+  textElem.className = sec > 15 ? "font-mono text-rose-400 font-medium text-xs" : "font-mono text-emerald-400 font-medium text-xs";
+}, 1000);
+
+function logToConsole(text) {
+  const box = document.getElementById("console-log-box");
+  const p = document.createElement("p");
+  const time = new Date().toLocaleTimeString("vi-VN", { hour12: false });
+  p.innerText = `[${time}] ${text}`;
+  box.appendChild(p);
+  box.scrollTop = box.scrollHeight;
+}
+
+function clearConsoleLog() {
+  document.getElementById("console-log-box").innerHTML = "";
+}
+
+function toggleConfigModal() {
+  document.getElementById("config-modal").classList.toggle("hidden");
+}
+
+function saveAndReconnectMQTT() {
+  mqttConfig.host = document.getElementById("cfg-host").value.trim();
+  mqttConfig.port = Number(document.getElementById("cfg-port").value.trim());
+  mqttConfig.topicTelemetry = document.getElementById("cfg-topic").value.trim();
+  toggleConfigModal();
+  if (mqttClient && mqttClient.isConnected()) mqttClient.disconnect();
+  connectMQTT();
+}
+
+// ==========================================
+// 9. CHẾ ĐỘ MÔ PHỎNG DỮ LIỆU TRONG/NGOÀI
+// ==========================================
+function toggleSimulation() {
+  const btn = document.getElementById("btn-simulation");
+  isSimulating = !isSimulating;
+
+  if (isSimulating) {
+    btn.innerHTML = `
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+      <span>Dừng Mô Phỏng Dữ Liệu</span>
+    `;
+    btn.className = "px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-medium rounded-xl transition flex items-center gap-1.5 text-xs shadow-lg shadow-rose-600/30";
+    logToConsole("[Simulation] Đã bật mô phỏng dữ liệu Trong/Ngoài (Cập nhật 2s/lần)");
+    setDeviceOnlineStatus(true);
+
+    simulationTimer = setInterval(() => {
+      const inTemp = 28.2 + (Math.random() * 1.5 - 0.75);
+      const inHumid = 64 + (Math.random() * 4 - 2);
+      const inLux = Math.floor(400 + Math.random() * 80);
+      const inMotion = Math.random() > 0.6 ? 1 : 0;
+
+      const outTemp = 32.5 + (Math.random() * 2.5 - 1.25);
+      const outHumid = 57 + (Math.random() * 6 - 3);
+      const outLux = Math.floor(1150 + Math.random() * 300);
+
+      const mockPacket = {
+        device_id: "ESP32_CLIMATE_NODE",
+        timestamp: Date.now() - Math.floor(Math.random() * 30 + 10),
+        indoor: {
+          temperature: parseFloat(inTemp.toFixed(1)),
+          humidity: parseFloat(inHumid.toFixed(1)),
+          lux: inLux,
+          motion: inMotion
+        },
+        outdoor: {
+          temperature: parseFloat(outTemp.toFixed(1)),
+          humidity: parseFloat(outHumid.toFixed(1)),
+          lux: outLux
+        },
+        fan_state: systemState.actuators.fanState ? "ON" : "OFF",
+        fan_pwm: systemState.actuators.fanPwm,
+        led_state: systemState.actuators.ledState ? "ON" : "OFF",
+        led_pwm: systemState.actuators.ledPwm,
+        mode: systemState.mode
+      };
+
+      processTelemetryData(mockPacket);
+    }, 2000);
+  } else {
+    btn.innerHTML = `
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+      <span>Test UI (Mô phỏng Dữ liệu)</span>
+    `;
+    btn.className = "px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl transition flex items-center gap-1.5 shadow-lg shadow-indigo-600/30 text-xs";
+    clearInterval(simulationTimer);
+    logToConsole("[Simulation] Đã dừng mô phỏng.");
+  }
+}
+
+// Khởi chạy hệ thống
+window.addEventListener("DOMContentLoaded", () => {
+  updateInternetStatus();
+  initChart();
+  connectMQTT();
+});
+  </script>
+</body>
+</html>

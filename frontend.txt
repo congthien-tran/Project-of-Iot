@@ -1,0 +1,324 @@
+frontend/
+├── .env
+├── package.json
+├── tailwind.config.js
+├── vite.config.js
+└── src/
+    ├── main.jsx
+    ├── index.css
+    ├── App.jsx               <--- File kích hoạt (chọn VER1 hoặc VER2)
+    ├── App_VER1.jsx          <--- Mã nguồn Giao diện 1 (Cuộn liền mạch)
+    ├── App_VER2.jsx          <--- Mã nguồn Giao diện 2 (Phân Tab Segmented)
+    ├── services/
+    │   ├── api.js            # Gọi REST API (Health, History, Control)
+    │   └── socket.js         # Kết nối Socket.io với server.js
+    ├── hooks/
+    │   └── useTelemetry.js   # Quản lý Socket.io, độ trễ, lịch sử 60 điểm & mô phỏng
+    └── components/
+        ├── Header.jsx        # Header tổng & trạng thái hệ thống
+        ├── AlarmBanner.jsx   # Cảnh báo vi khí hậu
+        ├── EnvironmentCards.jsx # Khối cảm biến Trong nhà / Ngoài trời / Delta
+        ├── ActuatorControls.jsx # Khối điều khiển Quạt & Đèn LED
+        ├── RealtimeChart.jsx    # Biểu đồ thời gian thực Chart.js (4 chỉ số)
+        └── TelemetryConsole.jsx # Đo độ trễ & Event log
+
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include <Wire.h>
+#include <DHT.h>
+#include <BH1750.h>
+#include <esp_arduino_version.h>
+
+// ==============================================================================
+// 1. CẤU HÌNH WI-FI & HIVEMQ CLOUD (Khớp với server.js)
+// ==============================================================================
+const char* WIFI_SSID     = "Tharo";      // Tên Wi-Fi của bạn
+const char* WIFI_PASSWORD = "Tharooooooo";  // Mật khẩu Wi-Fi
+
+// Broker lấy từ log server.js của bạn
+const char* MQTT_BROKER   = "5b48de2a237d43edbd050421370acd77.s1.eu.hivemq.cloud";
+const int   MQTT_PORT     = 8883;
+const char* MQTT_USERNAME = "DuonglendinhOlympia";  // Điền username HiveMQ Cloud
+const char* MQTT_PASSWORD = "12345678";  // Điền password HiveMQ Cloud
+
+// Topic MQTT
+const char* TOPIC_TELEMETRY = "hcmute/iot/climate/telemetry";
+const char* TOPIC_STATUS    = "hcmute/iot/climate/status";
+const char* TOPIC_CONTROL   = "hcmute/iot/climate/control";
+
+// ==============================================================================
+// 2. CẤU HÌNH CHÂN NGOẠI VI (PINS)
+// ==============================================================================
+#define DHTPIN_IN   4
+#define DHTPIN_OUT  5
+#define DHTTYPE     DHT22
+
+#define PIR_PIN     18
+#define FAN_PIN     19
+#define LED_PIN     23
+
+// Cấu hình PWM
+#define PWM_FREQ      5000
+#define PWM_RES       8      // 8-bit (0 - 255)
+#define FAN_CHANNEL   0
+#define LED_CHANNEL   1
+
+DHT dhtIn(DHTPIN_IN, DHTTYPE);
+DHT dhtOut(DHTPIN_OUT, DHTTYPE);
+
+BH1750 lightIn(0x23);   // Chân ADDR nối GND
+BH1750 lightOut(0x5C);  // Chân ADDR nối 3.3V
+
+WiFiClientSecure espClient;
+PubSubClient mqttClient(espClient);
+
+// Trạng thái hệ thống
+String systemMode = "AUTO"; // "AUTO" hoặc "MANUAL"
+int fanPwm = 0;             // 0 - 100%
+int ledPwm = 0;             // 0 - 100%
+String fanState = "OFF";
+String ledState = "OFF";
+
+unsigned long lastTelemetryMillis = 0;
+const unsigned long TELEMETRY_INTERVAL = 3000; // Gửi chu kỳ 3 giây/lần
+
+// Hàm phụ trợ xuất xung PWM tương thích cả ESP32 Core 2.x và 3.x
+void writeFanPWM(int duty) {
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+  ledcWrite(FAN_PIN, duty);
+#else
+  ledcWrite(FAN_CHANNEL, duty);
+#endif
+}
+
+void writeLedPWM(int duty) {
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+  ledcWrite(LED_PIN, duty);
+#else
+  ledcWrite(LED_CHANNEL, duty);
+#endif
+}
+
+// ==============================================================================
+// 3. HÀM XỬ LÝ NHẬN LỆNH ĐIỀU KHIỂN TỪ WEB (CALLBACK)
+// ==============================================================================
+void onMqttMessage(char* topic, byte* payload, unsigned int length) {
+  String messageStr = "";
+  for (unsigned int i = 0; i < length; i++) {
+    messageStr += (char)payload[i];
+  }
+  Serial.print("📥 [MQTT In] Topic: ");
+  Serial.print(topic);
+  Serial.print(" | Payload: ");
+  Serial.println(messageStr);
+
+  if (String(topic) == TOPIC_CONTROL) {
+    DynamicJsonDocument doc(512);
+    DeserializationError err = deserializeJson(doc, messageStr);
+    if (err) {
+      Serial.println("❌ Lỗi giải mã JSON lệnh điều khiển!");
+      return;
+    }
+
+    if (doc.containsKey("mode")) {
+      systemMode = doc["mode"].as<String>();
+      Serial.println("⚙️ Đổi chế độ: " + systemMode);
+    }
+
+    if (doc.containsKey("actuator")) {
+      String act = doc["actuator"].as<String>();
+      String st  = doc["state"] | "OFF";
+      int pwm    = doc["pwm"] | 0;
+
+      if (act == "fan") {
+        fanState = st;
+        fanPwm = pwm;
+        int duty = map(fanPwm, 0, 100, 0, 255);
+        writeFanPWM((fanState == "ON") ? duty : 0);
+        Serial.printf("🌀 Quạt DC -> Trạng thái: %s | PWM: %d%%\n", fanState.c_str(), fanPwm);
+      } 
+      else if (act == "led") {
+        ledState = st;
+        ledPwm = pwm;
+        int duty = map(ledPwm, 0, 100, 0, 255);
+        writeLedPWM((ledState == "ON") ? duty : 0);
+        Serial.printf("💡 Đèn LED -> Trạng thái: %s | PWM: %d%%\n", ledState.c_str(), ledPwm);
+      }
+    }
+
+    // Gửi ngay bản tin phản hồi để cập nhật Web tức thì
+    publishTelemetry();
+  }
+}
+
+// ==============================================================================
+// 4. KẾT NỐI WI-FI & MQTT VỚI CƠ CHẾ LWT (ONLINE / OFFLINE)
+// ==============================================================================
+void connectWiFi() {
+  Serial.print("📶 Đang kết nối Wi-Fi: ");
+  Serial.println(WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\n✅ Wi-Fi đã kết nối! IP: " + WiFi.localIP().toString());
+}
+
+void connectMQTT() {
+  while (!mqttClient.connected()) {
+    Serial.print("📡 Đang kết nối HiveMQ Cloud...");
+    String clientId = "ESP32_Climate_" + String(random(0xffff), HEX);
+
+    // Cấu hình LWT: nếu ESP32 mất điện/mất mạng, HiveMQ Cloud tự bắn "offline"
+    if (mqttClient.connect(clientId.c_str(), MQTT_USERNAME, MQTT_PASSWORD, 
+                           TOPIC_STATUS, 1, true, "offline")) {
+      Serial.println(" Kết nối thành công!");
+      
+      // Báo thiết bị đã Online
+      mqttClient.publish(TOPIC_STATUS, "online", true);
+
+      // Đăng ký nhận lệnh từ Backend
+      mqttClient.subscribe(TOPIC_CONTROL, 1);
+      Serial.printf("🎯 Đã subscribe topic: %s\n", TOPIC_CONTROL);
+    } else {
+      Serial.print(" Thất bại, mã lỗi rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" Thử lại sau 4 giây...");
+      delay(4000);
+    }
+  }
+}
+
+// ==============================================================================
+// 5. ĐỌC CẢM BIẾN & GỬI DỮ LIỆU TELEMETRY
+// ==============================================================================
+void publishTelemetry() {
+  // 1. Đọc dữ liệu cảm biến Trong nhà
+  float inTemp = dhtIn.readTemperature();
+  float inHumid = dhtIn.readHumidity();
+  float inLux = lightIn.readLightLevel();
+  int inMotion = digitalRead(PIR_PIN);
+
+  // 2. Đọc dữ liệu cảm biến Ngoài trời
+  float outTemp = dhtOut.readTemperature();
+  float outHumid = dhtOut.readHumidity();
+  float outLux = lightOut.readLightLevel();
+
+  // Giá trị dự phòng nếu chưa cắm cảm biến
+  if (isnan(inTemp) || isnan(inHumid)) { inTemp = 28.5; inHumid = 65.0; }
+  if (inLux < 0) inLux = 420.0;
+  if (isnan(outTemp) || isnan(outHumid)) { outTemp = 32.8; outHumid = 58.0; }
+  if (outLux < 0) outLux = 1250.0;
+
+  // 3. Logic tự động cơ bản khi ở chế độ AUTO
+  if (systemMode == "AUTO") {
+    if (inTemp > 30.0) {
+      fanState = "ON";
+      fanPwm = 80;
+    } else {
+      fanState = "OFF";
+      fanPwm = 0;
+    }
+    writeFanPWM(map(fanPwm, 0, 100, 0, 255));
+
+    if (inMotion == 1 && inLux < 200) {
+      ledState = "ON";
+      ledPwm = 100;
+    } else if (inMotion == 0) {
+      ledState = "OFF";
+      ledPwm = 0;
+    }
+    writeLedPWM(map(ledPwm, 0, 100, 0, 255));
+  }
+
+  // 4. Đóng gói JSON chuẩn khớp với server.js
+  DynamicJsonDocument doc(768);
+  doc["device_id"] = "ESP32_CLIMATE_NODE";
+  doc["timestamp"] = millis();
+  doc["mode"] = systemMode;
+
+  JsonObject ind = doc.createNestedObject("indoor");
+  ind["temperature"] = serialized(String(inTemp, 1));
+  ind["humidity"]    = serialized(String(inHumid, 1));
+  ind["lux"]         = (int)inLux;
+  ind["motion"]      = inMotion;
+
+  JsonObject out = doc.createNestedObject("outdoor");
+  out["temperature"] = serialized(String(outTemp, 1));
+  out["humidity"]    = serialized(String(outHumid, 1));
+  out["lux"]         = (int)outLux;
+
+  doc["fan_state"] = fanState;
+  doc["fan_pwm"]   = fanPwm;
+  doc["led_state"] = ledState;
+  doc["led_pwm"]   = ledPwm;
+
+  char jsonBuffer[768];
+  serializeJson(doc, jsonBuffer);
+
+  mqttClient.publish(TOPIC_TELEMETRY, jsonBuffer);
+  Serial.print("📤 [MQTT Out] ");
+  Serial.println(jsonBuffer);
+}
+
+// ==============================================================================
+// 6. KHỞI CHẠY (SETUP & LOOP)
+// ==============================================================================
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("\n🚀 Khởi động Hệ thống Đo Đạc Vi Khí Hậu ESP32...");
+
+  pinMode(PIR_PIN, INPUT);
+
+  // Cấu hình PWM tự động nhận diện theo phiên bản Core ESP32
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+  ledcAttach(FAN_PIN, PWM_FREQ, PWM_RES);
+  ledcAttach(LED_PIN, PWM_FREQ, PWM_RES);
+#else
+  ledcSetup(FAN_CHANNEL, PWM_FREQ, PWM_RES);
+  ledcAttachPin(FAN_PIN, FAN_CHANNEL);
+  ledcSetup(LED_CHANNEL, PWM_FREQ, PWM_RES);
+  ledcAttachPin(LED_PIN, LED_CHANNEL);
+#endif
+
+  writeFanPWM(0);
+  writeLedPWM(0);
+
+  // Khởi động các cảm biến
+  dhtIn.begin();
+  dhtOut.begin();
+
+  Wire.begin(21, 22);
+  lightIn.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
+  lightOut.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
+
+  // Bỏ qua chứng chỉ SSL cho HiveMQ Cloud
+  espClient.setInsecure();
+
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setCallback(onMqttMessage);
+  mqttClient.setBufferSize(768);
+
+  connectWiFi();
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    connectWiFi();
+  }
+
+  if (!mqttClient.connected()) {
+    connectMQTT();
+  }
+  mqttClient.loop();
+
+  unsigned long now = millis();
+  if (now - lastTelemetryMillis >= TELEMETRY_INTERVAL) {
+    lastTelemetryMillis = now;
+    publishTelemetry();
+  }
+}

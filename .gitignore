@@ -1,0 +1,19 @@
+# Thư viện tự sinh (npm install)
+node_modules/
+
+# Bản build frontend
+dist/
+
+# Bí mật: mật khẩu MongoDB, MQTT, WiFi
+.env
+.env.*
+!.env.example
+firmware/**/secrets.h
+
+# Log & file rác hệ điều hành / editor
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

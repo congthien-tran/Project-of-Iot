@@ -1,0 +1,465 @@
+==============================================================
+TÓM TẮT LUỒNG HOẠT ĐỘNG FIRMWARE ESP32 - Final_Test_Final.ino
+==============================================================
+
+Tác giả/Người đọc cần biết:
+- Đây là firmware chạy trên ESP32.
+- ESP32 đọc cảm biến môi trường, điều khiển quạt và đèn, giao tiếp qua WiFi + MQTT với backend.
+- Mục tiêu: giám sát nhiệt độ, độ ẩm, ánh sáng, chuyển động; tự động điều khiển quạt và đèn; nhận lệnh điều khiển từ web/backend.
+
+--------------------------------------------------------------------------------
+1. MÔ TẢ HỆ THỐNG
+--------------------------------------------------------------------------------
+- Cảm biến trong nhà:
+  + DHT22: nhiệt độ + độ ẩm
+  + BH1750: cường độ ánh sáng
+  + PIR: phát hiện người có trong phòng
+- Cảm biến ngoài trời:
+  + DHT22 + BH1750
+- Thiết bị chấp hành:
+  + Quạt DC điều khiển bằng PWM 12-bit qua MOSFET
+  + Đèn trần điều khiển bằng PWM 12-bit
+  + Đèn bàn học: bật/tắt đơn giản
+  + Đèn ngoài sân: bật/tắt đơn giản
+- Mạng:
+  + WiFi STA kết nối đến WiFi cá nhân
+  + MQTT qua TLS port 8883 tới HiveMQ Cloud
+- Chế độ:
+  + AUTO: ESP32 tự quyết định quạt và đèn theo cảm biến
+  + MANUAL: web/backend chủ động gửi lệnh điều khiển
+
+--------------------------------------------------------------------------------
+2. CẤU HÌNH CƠ BẢN VÀ PIN
+--------------------------------------------------------------------------------
+- I2C:
+  + SDA = 21
+  + SCL = 22
+- DHT:
+  + DHT trong nhà = GPIO27
+  + DHT ngoài trời = GPIO14
+- PIR:
+  + GPIO34
+- MOSFET / đèn và quạt:
+  + Quạt = GPIO25
+  + Đèn trong nhà = GPIO26
+  + Đèn bàn = GPIO32
+  + Đèn ngoài sân = GPIO33
+- DHT22 được khai báo bằng thư viện DHT.
+- BH1750 dùng sensor ánh sáng và đọc qua I2C.
+
+--------------------------------------------------------------------------------
+3. CÁC BIẾN QUAN TRỌNG
+--------------------------------------------------------------------------------
+- WiFi (khai báo trong secrets.h, không đưa lên GitHub):
+  + WIFI_SSID, WIFI_PASS
+- MQTT Broker:
+  + MQTT_BROKER, MQTT_USER, MQTT_PASS (khai báo trong secrets.h)
+  + MQTT_PORT = 8883 (trong file .ino)
+- Topic chính:
+  + TOPIC_TELEMETRY = "hcmute/iot/climate/telemetry"
+  + TOPIC_STATUS    = "hcmute/iot/climate/status"
+  + TOPIC_CONTROL   = "hcmute/iot/climate/control"
+
+- Bảng trạng thái quạt:
+  + FAN_STATE_OFF
+  + FAN_STATE_ON
+  + FAN_STATE_COOLDOWN
+
+- Bảng trạng thái PIR lọc nhiễu:
+  + PIR_UNCONFIRMED_LOW
+  + PIR_DEBOUNCING_HIGH
+  + PIR_CONFIRMED_HIGH
+  + PIR_DEBOUNCING_LOW
+
+- Biến cache cảm biến:
+  + cachedTempIndoor, cachedHumiIndoor
+  + cachedTempOutdoor, cachedHumiOutdoor
+  + filteredLuxIndoor, filteredLuxOutdoor
+
+- Biến điều khiển quạt:
+  + targetFanPwm: tốc độ quạt mục tiêu
+  + currentFanPwm: PWM thực tế đang xuất ra
+  + isFanKickstarting: flag đang bật xung khởi động
+  + fanBurstModeActive: chế độ burst cho tốc độ thấp
+  + currentFanState: trạng thái quạt (OFF/ON/COOLDOWN)
+
+- Biến điều khiển đèn và PIR:
+  + currentIndoorPwm: công suất đèn trần
+  + deskLedState: trạng thái đèn bàn
+  + currentMode: AUTO hoặc MANUAL
+  + lastPIRActivityTime: thời điểm phát hiện người gần nhất
+
+--------------------------------------------------------------------------------
+4. HOẠT ĐỘNG KHỞI TẠO (setup())
+--------------------------------------------------------------------------------
+Khi ESP32 khởi động:
+1. Serial khởi tạo để in log ra máy tính.
+2. Thiết lập pin mode:
+   - PIR nhập tín hiệu
+   - LED bàn và LED ngoài sân là output
+   - Ghi LOW ban đầu
+3. Khởi tạo PWM 12-bit cho:
+   - LED trong nhà
+   - Fan
+   - Giá trị ban đầu = 0
+4. Khởi tạo I2C bus cho BH1750.
+5. Khởi tạo 2 sensor BH1750:
+   - Indoor: địa chỉ 0x23
+   - Outdoor: địa chỉ 0x5C
+6. Khởi tạo 2 DHT22:
+   - dhtIndoor.begin()
+   - dhtOutdoor.begin()
+7. Đợi 1 giây, gọi updateDHTData() lần đầu để đọc nhiệt độ/độ ẩm ngay.
+8. Đọc lux ban đầu từ BH1750 và đặt filteredLuxIndoor / filteredLuxOutdoor.
+9. Cài đặt Hardware Timer để cứ 2.5 giây đọc lại DHT:
+   - timerDHT
+   - ISR: onDhtTimer()
+   - biến dhtReadFlag = true
+10. Kết nối WiFi: setupWiFi()
+11. Cấu hình MQTT TLS: espClientSecure.setInsecure();
+12. Đặt server broker và callback nhận lệnh: mqttCallback
+13. Thiết lập bộ đệm MQTT 1024 bytes.
+
+Kết luận:
+- setup() chuẩn bị toàn bộ phần cứng và kết nối hệ thống.
+
+--------------------------------------------------------------------------------
+5. VÒNG LẶP CHÍNH (loop())
+--------------------------------------------------------------------------------
+loop() chạy liên tục như vòng lặp chính của firmware.
+
+Bước 1: nếu dhtReadFlag bật thì đọc lại DHT
+- if (dhtReadFlag) {
+    dhtReadFlag = false;
+    updateDHTData();
+  }
+- Đây là cách đọc DHT không chặn loop, tránh làm chậm hệ thống
+
+Bước 2: giữ kết nối MQTT
+- Nếu chưa kết nối MQTT: gọi reconnectMQTT() sau mỗi 5 giây
+- Nếu đã kết nối: gọi client.loop() để xử lý nhận và gửi dữ liệu MQTT
+
+Bước 3: EMA lọc ánh sáng mỗi 100ms
+- Đọc rawLuxIn, rawLuxOut từ BH1750
+- Nếu giá trị hợp lệ:
+  + filteredLuxIndoor = EMA_ALPHA * rawLuxIn + (1-EMA_ALPHA) * filteredLuxIndoor
+  + filteredLuxOutdoor = EMA_ALPHA * rawLuxOut + (1-EMA_ALPHA) * filteredLuxOutdoor
+- EMA giúp làm mịn dữ liệu ánh sáng, tránh dao động quá mạnh
+
+Bước 4: xử lý chống rung PIR
+- processPIRAntiChattering(currentTime)
+- Mục tiêu: khi PIR vào/ra không ổn định, hệ thống không bị nhảy trạng thái liên tục
+
+Bước 5: chạy state machine nếu currentMode == "AUTO"
+- processFanStateMachine(currentTime)
+- processIndoorLightingStateMachine(currentTime)
+- Chỉ khi ở chế độ AUTO mới tự động điều khiển theo cảm biến
+
+Bước 6: xử lý tốc độ quạt và ramp PWM
+- processFanSpeedRamp(currentTime)
+- Dù ở AUTO hay MANUAL, quạt vẫn đi qua logic soft-ramp và burst mode
+
+Bước 7: chiếu sáng ngoài trời
+- processOutdoorLighting(currentTime)
+- Nếu亮度 thấp => bật đèn ngoài, nếu quá sáng => tắt
+
+Bước 8: gửi telemetry định kỳ 3 giây
+- printSystemTelemetry();
+- publishTelemetry();
+
+--------------------------------------------------------------------------------
+6. GIẢI THÍCH CÁC HÀM CHÍNH
+--------------------------------------------------------------------------------
+6.1. onDhtTimer()
+Mục đích:
+- ISR từ hardware timer, chỉ gán cờ dhtReadFlag = true.
+- Không đọc sensor trực tiếp trong interrupt vì đọc DHT có thể chậm và không an toàn trong ISR.
+
+--------------------------------------------------------------------------------
+6.2. updateDHTData()
+Mục đích:
+- Đọc nhiệt độ và độ ẩm của cả trong nhà và ngoài trời.
+- Nếu giá trị không phải NaN thì lưu vào cachedTempIndoor, cachedHumiIndoor ...
+- Đây là nguồn dữ liệu chính cho logic AUTO của fan và các cảnh báo.
+
+--------------------------------------------------------------------------------
+6.3. processPIRAntiChattering(unsigned long now)
+Mục đích:
+- Loại bỏ nhiễu khi cảm biến PIR dao động.
+- Từ trạng thái vật lý digitalRead(PIN_PIR), firmware đi qua 4 trạng thái:
+  + PIR_UNCONFIRMED_LOW
+  + PIR_DEBOUNCING_HIGH
+  + PIR_CONFIRMED_HIGH
+  + PIR_DEBOUNCING_LOW
+- Nếu tín hiệu PIR cao đủ thời gian >= PIR_DEBOUNCE_TIME (200ms), mới xác nhận có người.
+- Khi PIR xuống thấp mà đủ thời gian debouncing, mới chuyển về LOW.
+- Kết quả: tránh bật/tắt đèn liên tục do rung.
+
+--------------------------------------------------------------------------------
+6.4. processIndoorLightingStateMachine(unsigned long now)
+Mục đích:
+- Điều khiển đèn trần theo độ sáng trong phòng và PIR.
+- Cách làm:
+  1. Nếu PIR đang xác nhận có người hoặc đang trong trạng thái hạ về LOW, thì lastPIRActivityTime = now
+  2. isRoomOccupied = (now - lastPIRActivityTime < LED_ROOM_HOLD_TIME)
+  3. isDeskOccupied = (now - lastPIRActivityTime < LED_DESK_HOLD_TIME)
+  4. deskLedState = isDeskOccupied
+  5. Nếu phòng có người và lux trong nhà thấp hơn target 100 lux:
+     - deficit = 100 - lux
+     - ratio = deficit / 100
+     - targetPwm = ratio * 4095
+     - rồi constrain 0..4095
+  6. Nếu không có người hoặc đủ sáng -> targetPwm = 0
+  7. Cập nhật currentIndoorPwm bằng fade ramp 10ms/25-60 bước để đèn tăng/giảm mượt
+
+Giải thích đơn giản:
+- Người có trong phòng => đèn sáng theo ánh sáng thiếu hụt
+- Người ra khỏi phòng => đèn tắt dần theo thời gian lưu giữ
+- Đèn bàn duy trì sáng trong 30s sau khi có người
+
+--------------------------------------------------------------------------------
+6.5. processOutdoorLighting(unsigned long now)
+Mục đích:
+- Điều khiển đèn ngoài sân bằng ngưỡng lux.
+- Nếu filteredLuxOutdoor < 10 => bật đèn
+- Nếu filteredLuxOutdoor > 15 => tắt đèn
+- Có hysteresis để tránh bật tắt quá nhanh quanh ngưỡng.
+
+--------------------------------------------------------------------------------
+6.6. triggerFanKickstart(int newTargetPwm, unsigned long now)
+Mục đích:
+- Đặt mục tiêu tốc độ quạt và xử lý khởi động quạt khi dừng hẳn.
+- Nếu newTargetPwm > 0:
+  + currentFanState = FAN_STATE_ON
+  + Nếu currentFanPwm == 0: quạt đang đứng yên
+     - bật cờ isFanKickstarting = true
+     - fanKickStartTime = now
+     - currentFanPwm = 4095
+     - ledcWrite(PIN_MOSFET_FAN, currentFanPwm)
+     - quạt nhận xung cực đại 400ms để phá ma sát tĩnh
+- Nếu newTargetPwm == 0:
+  + tắt quạt tức thì
+  + currentFanState = FAN_STATE_OFF
+  + currentFanPwm = 0
+  + ledcWrite(PIN_MOSFET_FAN, 0)
+
+Ý nghĩa:
+- Quạt DC có thể không khởi động nếu PWM quá thấp.
+- Kickstart 4095 trong 400ms là cách giúp quạt quay mềm hơn.
+
+--------------------------------------------------------------------------------
+6.7. processFanSpeedRamp(unsigned long now)
+Mục đích:
+- Điều khiển quạt mượt và an toàn khi đổi tốc độ, nhất là ở tốc độ thấp.
+- Tại tốc độ mục tiêu targetFanPwm == 0: tắt quạt và reset trạng thái burst.
+- Nếu đang trong kickstart: giữ xung 4095 trong 400ms rồi mới vào ramp tiếp theo.
+- Nếu targetFanPwm < FAN_SUSTAIN_PWM:
+  + đây là vùng tốc độ quá thấp, dễ làm quạt chết máy
+  + dùng chế độ BURST:
+     - mức sustain = 1700
+     - mức coast = 900
+     - chu kỳ 250ms
+     - công suất trung bình do ratio quyết định
+     - giúp quạt không bị chết ở mức thấp nhưng vẫn tản nhiệt hiệu quả
+  + nếu currentFanPwm > sustain: hạ nhanh về sustain trước rồi mới burst
+- Nếu targetFanPwm >= FAN_SUSTAIN_PWM:
+  + dùng ramp mượt điều chỉnh ±60 mỗi 15ms
+  + nếu lớn hơn mục tiêu: giảm dần
+  + nếu nhỏ hơn mục tiêu: tăng dần
+
+Giải thích dễ hiểu:
+- Chế độ burst = quạt không chạy liên tục ở tốc độ rất thấp, mà nhấp nháy giữa tốc độ đủ quay và tốc độ lướt đà.
+- Cách này tránh quạt chết máy nhưng vẫn đạt hiệu ứng làm mát ở mức nhẹ.
+
+--------------------------------------------------------------------------------
+6.8. processFanStateMachine(unsigned long now)
+Mục đích:
+- Logic AUTO của quạt dựa trên nhiệt độ và độ ẩm.
+- Có 3 trạng thái:
+  1. FAN_STATE_OFF
+     - nếu nhiệt độ trong nhà > 27°C và chênh lệch nhiệt độ với ngoài trời > 1°C -> kích hoạt quạt
+     - hoặc độ ẩm trong nhà > 70% và chênh lệch độ ẩm > 5% -> kích hoạt quạt
+     - khi trigger: triggerFanKickstart(4095, now)
+  2. FAN_STATE_ON
+     - giữ quạt chạy nếu điều kiện còn đúng
+     - nếu đã chạy đủ FAN_MIN_RUN_TIME (15000ms)
+     - và tempResolved && humiResolved -> tắt quạt, chuyển sang COOLDOWN
+  3. FAN_STATE_COOLDOWN
+     - chờ thêm FAN_MIN_OFF_TIME = 15000ms mới về OFF hẳn
+
+Điều kiện tắt:
+- Nhiệt độ trong nhà <= 26.5°C hoặc chênh lệch nhiệt độ <= 0.5°C
+- Hoặc độ ẩm trong nhà <= 65% hoặc chênh lệch <= 2%
+
+Nói ngắn gọn:
+- Quạt chạy nếu phòng quá nóng/quá ẩm so với ngoài trời.
+- Sau khi điều kiện bình thường, quạt không tắt ngay mà có thời gian nghỉ mát để tránh rung và đáp ứng quá nhanh.
+
+--------------------------------------------------------------------------------
+6.9. setupWiFi()
+Mục đích:
+- Kết nối ESP32 tới WiFi.
+- Cố gắng tối đa 20 lần, mỗi lần 500ms
+- Nếu thành công: in IP
+- Nếu thất bại: tiếp tục chạy, chờ lần reconnect sau.
+
+--------------------------------------------------------------------------------
+6.10. reconnectMQTT()
+Mục đích:
+- Kết nối lại tới MQTT Broker nếu mất kết nối.
+- Tạo clientId dạng "ESP32_CLIMATE_XXXX"
+- Gửi "Last Will" topic TOPIC_STATUS với payload {"status":"OFFLINE"}
+- Nếu kết nối thành công:
+  + publish TOPIC_STATUS = {"status":"ONLINE"}
+  + subscribe TOPIC_CONTROL
+- Nếu thất bại: log mã lỗi rc
+
+--------------------------------------------------------------------------------
+6.11. mqttCallback(char* topic, byte* payload, unsigned int length)
+Mục đích:
+- Đọc lệnh từ backend/web gửi tới topic control.
+- Ví dụ payload JSON có thể là:
+  {
+    "mode": "AUTO",
+    "actuator": "fan",
+    "pwm": 1800
+  }
+  hoặc:
+  {
+    "actuator": "led_desk",
+    "state": "ON"
+  }
+- Chức năng:
+  1. Nếu có mode => cập nhật currentMode
+  2. Nếu actuator == "fan":
+     - currentMode = "MANUAL"
+     - reqPwm = pwm nếu có, hoặc ON=>4095, OFF=>0
+     - triggerFanKickstart(reqPwm, millis())
+  3. Nếu actuator == "led_indoor" / "led_in" / "led":
+     - currentMode = "MANUAL"
+     - nếu có pwm thì set currentIndoorPwm
+     - nếu state ON => 4095, OFF => 0
+     - ledcWrite(PIN_MOSFET_LED_IN,...)
+  4. Nếu actuator == "led_desk":
+     - currentMode = "MANUAL"
+     - deskLedState = ON/OFF
+     - digitalWrite
+  5. Nếu actuator == "led_outdoor" / "led_out":
+     - digitalWrite hoạt động tương ứng
+- Sau khi xử lý xong: publishTelemetry() để báo trạng thái mới cho backend.
+
+--------------------------------------------------------------------------------
+6.12. publishTelemetry()
+Mục đích:
+- Gửi dữ liệu lên topic TOPIC_TELEMETRY.
+- JSON gồm:
+  + device_id
+  + mode
+  + indoor.temperature
+  + indoor.humidity
+  + indoor.lux
+  + indoor.motion
+  + outdoor.temperature
+  + outdoor.humidity
+  + outdoor.lux
+  + fan_state
+  + fan_pwm
+  + led_state
+  + led_pwm
+  + led_desk_state
+- Dữ liệu được serializeJson rồi publish bằng client.publish(...)
+- Đây là gói tin chính mà backend nhận và lưu vào MongoDB.
+
+--------------------------------------------------------------------------------
+6.13. printSystemTelemetry()
+Mục đích:
+- In ra Serial các thông số hệ thống cho debug.
+- Hiện dữ liệu chính:
+  + Lux trong nhà / ngoài trời
+  + Nhiệt độ trong nhà / ngoài trời / delta T
+  + Độ ẩm trong nhà / ngoài trời / delta H
+  + Quạt target / PWM thực tế / burst mode
+  + Đèn trong nhà / đèn bàn
+- Hữu ích khi debug trên Serial Monitor.
+
+--------------------------------------------------------------------------------
+7. LUỒNG DỮ LIỆU TOÀN BỘ
+--------------------------------------------------------------------------------
+A. Đọc cảm biến
+- Timer 2.5s gọi onDhtTimer -> dhtReadFlag = true
+- loop() phát hiện flag -> updateDHTData()
+- 100ms/lần đọc BH1750 -> suavize bằng EMA
+- PIR được lọc nhiễu
+
+B. Tự động điều khiển
+- mode = AUTO
+- processFanStateMachine()
+- processIndoorLightingStateMachine()
+- processOutdoorLighting()
+
+C. Lệnh điều khiển từ web/backend
+- backend publish JSON lên MQTT control
+- ESP32 nhận ở mqttCallback
+- cập nhật mode và actuator
+- triggerFanKickstart / ledcWrite / digitalWrite
+- publishTelemetry() phản hồi lại trạng thái mới
+
+D. Gửi lên hệ thống trung tâm
+- ESP32 publish JSON lên TOPIC_TELEMETRY
+- Backend subscribe và lưu MongoDB
+- Socket.io phát realtime cho frontend
+- Frontend hiển thị biểu đồ, card số liệu và điều khiển
+
+--------------------------------------------------------------------------------
+8. SƠ ĐỒ LUỒNG NGẮN GỌN
+--------------------------------------------------------------------------------
+Khởi động
+  -> setup()
+    -> pin + PWM + I2C + sensor
+    -> timer DHT 2.5s
+    -> WiFi
+    -> MQTT connect
+
+Loop liên tục
+  -> đọc timer DHT
+  -> keep MQTT alive
+  -> đọc lux + lọc EMA
+  -> lọc PIR
+  -> AUTO logic
+    + quạt
+    + đèn trong nhà
+    + đèn ngoài nhà
+  -> ramp quạt / burst mode
+  -> publish telemetry mỗi 3s
+
+Nhận lệnh
+  -> mqttCallback
+    -> parse JSON
+    -> đổi mode / chân điều khiển
+    -> phản hồi publishTelemetry
+
+--------------------------------------------------------------------------------
+9. NHẬN XÉT NGẮN VỀ LOGIC
+--------------------------------------------------------------------------------
+- Firmware này có tính tự động khá mạnh và khá hợp lý cho hệ thống vi khí hậu.
+- Quạt được thiết kế cẩn thận để tránh chết máy ở tốc độ thấp bằng cơ chế burst + kickstart.
+- Đèn trần và PIR hoạt động theo logic "có người thì sáng, đủ sáng thì tắt".
+- Đèn ngoài sân hoạt động theo ngưỡng ánh sáng ban ngày.
+- MQTT là trung tâm điều khiển và dữ liệu, phù hợp cho hệ thống IoT thực tế.
+- Nếu cần mở rộng thêm, điểm dễ nâng cấp là thêm trạng thái MANUAL/ AUTO rõ ràng hơn, lưu lịch sử điều khiển, và thêm watchdog hệ thống.
+
+--------------------------------------------------------------------------------
+10. CÁCH ĐỌC FILE NÀY NHANH NHẤT
+--------------------------------------------------------------------------------
+- Nếu bạn chỉ cần hiểu luồng tổng quát: đọc phần 1, 4, 5, 7, 8
+- Nếu bạn cần đôi khi debug: đọc phần 6 các hàm cụ thể
+- Nếu muốn hiểu logic quạt: đọc 6.6, 6.7, 6.8
+- Nếu muốn hiểu điều khiển đèn: đọc 6.4, 6.5, 6.11
+- Nếu muốn hiểu gửi dữ liệu lên backend: đọc 6.12
+
+Kết luận:
+- Firmware này là một hệ thống IoT "smart climate control" hoàn chỉnh, đủ để đọc cảm biến, tự động hóa, giao tiếp MQTT, điều khiển quạt và đèn, và gửi telemetry realtime lên web dashboard.
+
+==============================================================
+HẾT TÓM TẮT
+==============================================================

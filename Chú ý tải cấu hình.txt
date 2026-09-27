@@ -1,0 +1,234 @@
+Người nhận cần cài Node.js (nên dùng bản LTS, trang nodejs.org) trước. Sau đó chạy lệnh trong từng thư mục. Danh sách thư viện đã nằm sẵn trong package.json nên không cần cài từng gói riêng.
+
+Ở backend: 
+Thực hiện ở cmd tại thư mục backend những câu lệnh sau
+    cd backend
+    npm install
+    npm start
+
+
+Ở frontend:
+Thực hiện ở cmd tại thư mục frontend những câu lệnh sau
+    cd frontend
+    npm install
+    npm run dev
+
+
+1. Vẽ và giải thích đường đi của một gói dữ liệu từ cảm biến đến khi hiện lên màn hình.
+
+Gợi ý: ESP32 publish JSON lên topic telemetry của HiveMQ. Backend subscribe, parse, lưu MongoDB, rồi emit Socket.io telemetry_update. Hook useTelemetry nhận sự kiện và cập nhật state, biểu đồ.
+2. Vì sao dùng MQTT giữa ESP32 và server mà không dùng HTTP? Vì sao còn cần Socket.io giữa server và web?
+
+Gợi ý: MQTT là mô hình publish/subscribe, nhẹ, phù hợp thiết bị nhúng, và broker giữ kết nối hai chiều. Trình duyệt không nói MQTT trực tiếp được trong thiết kế này, nên backend làm cầu nối và đẩy realtime bằng Socket.io thay vì để web hỏi liên tục (polling).
+3. Khi bấm "Bật quạt" trên web, chuyện gì xảy ra từng bước? Vì sao giao diện đổi ngay còn trạng thái thật đến sau?
+
+Gợi ý: sendCommand cập nhật giao diện ngay (optimistic update), rồi gọi POST /api/v1/control. Backend publish xuống topic control. ESP32 thực thi, và trạng thái thật quay lại qua telemetry kế tiếp. Chưa có ACK riêng nên web phải chờ gói kế tiếp.
+4. QoS của MQTT là gì? Dự án đang dùng mức nào và vì sao?
+
+Gợi ý: QoS 0 là gửi tối đa một lần, QoS 1 là ít nhất một lần và có PUBACK, QoS 2 là đúng một lần. Lệnh điều khiển gửi với QoS 1 để không mất lệnh. Bạn cần biết ghi chú NoteBE.txt ghi QoS 0 và trả lời được vì sao có sự khác biệt đó.
+5. Vì sao thanh trượt PWM chỉ gửi lệnh mỗi ~60ms? Đoạn isDraggingRef để làm gì?
+
+Gợi ý: Nếu gửi mỗi pixel kéo sẽ làm ngập MQTT và ESP32. Throttle 60ms, có timer gửi nốt giá trị cuối khi dừng kéo. isDraggingRef ngăn dữ liệu telemetry từ server ghi đè giá trị đang kéo, làm thanh trượt bị giật ngược.
+6. PWM 12-bit là gì, vì sao giá trị tối đa là 4095?
+
+Gợi ý: 2^12 = 4096 mức (0–4095). Độ phân giải cao hơn 8-bit (256 mức) nên điều chỉnh tốc độ quạt và độ sáng mượt hơn. Schema Mongoose cũng ép min: 0, max: 4095.
+7. Chỉ số Heat Index trong code tính thế nào? Công thức đó thực chất là công thức gì?
+
+Gợi ý: T + 0.33·e − 4.0, với e = RH/100 · 6.105 · exp(17.27T/(237.7+T)). Đây là công thức nhiệt độ cảm nhận (apparent temperature, dạng của Cục Khí tượng Úc, bỏ thành phần gió), không phải công thức Heat Index của NOAA. Bạn nên đọc lại code để không nói nhầm tên công thức.
+8. Dữ liệu lưu ở đâu, lưu bao lâu? Giải thích TTL index.
+
+Gợi ý: MongoDB Atlas, collection telemetries theo schema Telemetry. TTL index trên createdAt với expireAfterSeconds: 2592000 (30 ngày), MongoDB tự xóa bản ghi cũ. Index theo timestamp giúp truy vấn lịch sử nhanh.
+9. Web biết ESP32 đang Offline bằng cách nào? Nhược điểm của cách đó và cách cải tiến?
+
+Gợi ý: Watchdog phía web, quá 7 giây không có telemetry thì coi là Offline. Nhược điểm là phải chờ hết ngưỡng mới biết, và có thể báo nhầm khi mạng trễ. Cải tiến: dùng MQTT Last Will trên topic status, để broker báo ngay khi ESP32 mất kết nối.
+10. Nếu đưa hệ thống lên tên miền thật, bạn phải đổi những gì? Rủi ro bảo mật hiện tại là gì?
+
+Gợi ý: Đổi VITE_API_URL và VITE_SOCKET_URL ở frontend rồi build lại, đặt CORS_ORIGIN ở backend, dùng HTTPS cho cả API và Socket.io. Rủi ro là API /control chưa có xác thực, .env chứa mật khẩu dạng plaintext, và CORS mặc định là *.
+Câu hỏi bổ sung giảng viên hay hỏi thêm để "gài":
+
+"Nếu rút mạng backend 5 phút thì dữ liệu trong thời gian đó có mất không?" Có, vì backend không lưu khi mất kết nối. Broker ở chế độ clean: true cũng không giữ lại tin.
+"Em đã tự đo độ trễ chưa, con số 'Telemetry Latency' trên web đo cái gì?" Hiện timestamp do backend gán bằng giờ nhận, nên số đó chỉ đo đoạn server → web, không phải ESP32 → web.
+"Em sửa một dòng bất kỳ trong code này, nói thử nó ảnh hưởng gì?" Nên chọn sẵn một file, ví dụ useTelemetry.js, và luyện giải thích từng hàm.
+
+Có hai chỗ trong gợi ý trước tôi diễn đạt chưa chuẩn, nên đáp án dưới đây đã sửa lại:
+- **Câu 2:** HiveMQ Cloud có hỗ trợ MQTT qua WebSocket, nên trình duyệt về mặt kỹ thuật vẫn kết nối MQTT trực tiếp được. Lý do dự án đi qua backend là lý do thiết kế, nêu ở câu 2.
+- **Câu 4:** đã nói chính xác QoS đang dùng ở từng chiều, nêu ở câu 4.
+
+---
+
+**Câu 1. Đường đi của một gói dữ liệu**
+
+1. ESP32 đọc DHT22, BH1750, PIR rồi publish một JSON lên topic `hcmute/iot/climate/telemetry` của HiveMQ Cloud, qua kết nối TLS cổng 8883, khoảng 3 giây một lần.
+2. Backend Node.js (`config/mqtt.js`) là MQTT client đã subscribe topic đó, nên broker chuyển gói tin cho backend.
+3. Backend parse JSON, chuẩn hóa số liệu (gán mặc định cho trường thiếu, tự tính Heat Index nếu ESP32 không gửi).
+4. Backend tạo document theo model `Telemetry` và `save()` vào MongoDB Atlas.
+5. Ngay sau khi lưu, backend `emit('telemetry_update', bản_ghi)` qua Socket.io cho mọi web client.
+6. Ở frontend, `useTelemetry.js` nhận sự kiện, gọi `processIncomingData` để cập nhật số liệu, thêm điểm vào biểu đồ (tối đa 60 điểm), đánh dấu ESP32 Online và ghi log.
+
+Lúc mở trang, frontend còn gọi thêm `GET /telemetry/history?limit=60` để có sẵn dữ liệu vẽ biểu đồ.
+
+---
+
+**Câu 2. Vì sao MQTT giữa ESP32 và server, vì sao còn cần Socket.io**
+
+*MQTT cho ESP32:* MQTT dùng mô hình publish/subscribe, header rất nhỏ, tiết kiệm băng thông và RAM, có sẵn QoS, giữ kết nối lâu dài và truyền hai chiều. Điều này phù hợp thiết bị nhúng có tài nguyên hạn chế hơn HTTP, vì HTTP phải mở một request mới cho mỗi lần gửi và server không chủ động đẩy lệnh xuống thiết bị được.
+
+*Socket.io cho web:* Server cần chủ động đẩy dữ liệu mới lên trình duyệt ngay khi có, mà không để web hỏi liên tục (polling) gây tốn tài nguyên và trễ. Socket.io dùng WebSocket và tự dự phòng bằng long-polling, đồng thời tự kết nối lại.
+
+*Vì sao không cho web nói MQTT trực tiếp:* Về kỹ thuật thì vẫn làm được nhờ MQTT qua WebSocket, nhưng thiết kế hiện tại có backend ở giữa vì:
+- Cần lưu lịch sử vào MongoDB. Nếu chỉ có web thì khi không ai mở trang, dữ liệu sẽ mất.
+- Không lộ tài khoản MQTT trong code trình duyệt.
+- Có một chỗ chuẩn hóa dữ liệu và tính toán tập trung, và sau này dễ thêm xác thực.
+
+---
+
+**Câu 3. Bấm "Bật quạt" thì chuyện gì xảy ra**
+
+1. `ActuatorControls.jsx` gọi `onSendCommand({ actuator: 'fan', state: 'ON', pwm: 4095, mode: 'MANUAL' })`. Nếu đang AUTO thì tự chuyển sang MANUAL.
+2. `sendCommand` trong hook **cập nhật state giao diện ngay lập tức** (optimistic update), rồi gọi `POST /api/v1/control`.
+3. Backend (`sendControl`) lấy các trường `actuator/state/pwm/mode`, publish JSON xuống topic `hcmute/iot/climate/control` (QoS 1).
+4. ESP32 subscribe topic control, nhận lệnh và bật quạt.
+5. Gói telemetry kế tiếp của ESP32 mang trạng thái quạt thật, đi ngược lại qua broker → backend → Socket.io → web.
+
+*Vì sao giao diện đổi ngay mà trạng thái thật đến sau:* Optimistic update giúp người dùng thấy phản hồi tức thì thay vì chờ 1–3 giây. Trạng thái thật do ESP32 báo và ghi đè lại khi có telemetry. Hiện chưa có gói ACK riêng cho từng lệnh, nên web phải chờ gói telemetry kế tiếp (chu kỳ ~3 giây) để biết lệnh có thực sự được thực thi hay không.
+
+---
+
+**Câu 4. QoS và mức đang dùng**
+
+QoS (Quality of Service) là mức đảm bảo giao tin của MQTT:
+- **QoS 0:** gửi tối đa một lần, không xác nhận, có thể mất tin nhưng nhanh nhất.
+- **QoS 1:** gửi ít nhất một lần, người nhận trả PUBACK, có thể trùng tin.
+- **QoS 2:** đúng một lần, bắt tay 4 bước, chậm nhất.
+
+*Trong dự án:*
+- **Backend publish lệnh điều khiển:** QoS 1 (`{ qos: 1 }` trong `telemetryController.js`), vì lệnh bật/tắt thiết bị quan trọng và không nên mất. Lệnh lặp lại cũng vô hại vì mang giá trị tuyệt đối (bật, PWM = x).
+- **Backend subscribe telemetry:** mức mặc định là QoS 0, vì dữ liệu cảm biến gửi liên tục, mất một gói không sao.
+- **Ghi chú `NoteBE.txt`** ghi QoS 0 cho cả hai bên, nên cần thống nhất với firmware ESP32. Khi trả lời hãy nói rõ code backend hiện tại đang dùng QoS 1 cho chiều control.
+
+---
+
+**Câu 5. Throttle 60 ms và `isDraggingRef`**
+
+- **Vì sao throttle:** sự kiện `onChange` của thanh trượt bắn rất nhiều lần khi kéo (có thể hàng trăm lần mỗi giây). Nếu mỗi lần gửi một HTTP request kèm một MQTT publish thì sẽ ngập mạng, ngập broker và làm ESP32 xử lý dồn dập. Code chỉ gửi nếu đã qua hơn 60 ms từ lần gửi trước.
+- **Timer đi kèm:** nếu một sự kiện bị bỏ qua vì chưa đủ 60 ms, code đặt `setTimeout` để đảm bảo **giá trị cuối cùng khi người dùng dừng kéo luôn được gửi**.
+- **`isDraggingFanRef` / `isDraggingLedRef`:** cờ đánh dấu người dùng đang chạm thanh trượt. Khi telemetry từ server về, `useEffect` chỉ đồng bộ giá trị PWM nếu **không** đang kéo. Nếu không có cờ này, dữ liệu cũ từ server sẽ ghi đè giá trị đang kéo và thanh trượt bị giật ngược. Khi thả chuột, cờ được tắt sau 300 ms để chờ lệnh cuối được gửi xong.
+- Dùng `useRef` thay vì `useState` vì thay đổi cờ không cần render lại giao diện.
+
+---
+
+**Câu 6. PWM 12-bit và giá trị 4095**
+
+PWM (điều chế độ rộng xung) điều chỉnh công suất bằng cách bật/tắt rất nhanh, tỉ lệ thời gian bật (duty cycle) quyết định tốc độ quạt hoặc độ sáng đèn.
+
+12-bit nghĩa là duty cycle có 2¹² = 4096 mức, từ 0 đến 4095 (0 là tắt hẳn, 4095 là 100%). Độ phân giải này mịn hơn 8-bit (256 mức), nên đèn và quạt điều chỉnh mượt hơn, nhất là ở vùng sáng yếu. ESP32 có bộ LEDC hỗ trợ độ phân giải này. Trong code, hằng `PWM_MAX = 4095` ở frontend và ràng buộc `min: 0, max: 4095` trong schema Mongoose đều dựa trên con số đó. Phần trăm hiển thị được tính là `pwm / 4095 × 100`.
+
+---
+
+**Câu 7. Heat Index trong code**
+
+Công thức trong `calculateHeatIndex`:
+
+```
+e  = RH/100 × 6.105 × exp(17.27·T / (237.7 + T))
+HI = T + 0.33·e − 4.0
+```
+
+Trong đó T là nhiệt độ (°C), RH là độ ẩm (%), `e` là áp suất hơi nước (hPa).
+
+Đây thực chất là công thức **nhiệt độ cảm nhận (apparent temperature)** của Cục Khí tượng Úc (Bureau of Meteorology), với thành phần gió bằng 0. Nó khác công thức Heat Index của NOAA (đa thức Rothfusz). Ý nghĩa: độ ẩm cao làm cơ thể khó thoát mồ hôi nên cảm giác nóng hơn nhiệt độ đo được. Ví dụ 30,6°C và 78,5% cho kết quả ~37,9°C. Nếu ESP32 đã gửi `heat_index` thì backend dùng luôn giá trị đó, còn không mới tự tính. Ngưỡng cảnh báo trên web là Heat Index > 38 hoặc nhiệt độ trong nhà > 35°C.
+
+---
+
+**Câu 8. Nơi lưu dữ liệu, thời gian lưu, TTL index**
+
+- **Nơi lưu:** MongoDB Atlas (đám mây), database `iot_climate_db`, collection `telemetries` (Mongoose tự đặt tên số nhiều từ model `Telemetry`). Kết nối qua `MONGODB_URI` trong `.env`.
+- **Mỗi bản ghi** gồm `deviceId`, `timestamp`, `indoor`, `outdoor`, `actuators`, `mode`, cùng `createdAt/updatedAt` do `timestamps: true` thêm vào.
+- **TTL index:** `TelemetrySchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 })`. 2.592.000 giây = 30 ngày. MongoDB có tiến trình nền (chạy khoảng mỗi phút) xóa các document có `createdAt` cũ hơn 30 ngày. Mục đích là giới hạn dung lượng, vì cứ 3 giây có một bản ghi, tức khoảng 28.800 bản ghi mỗi ngày, và gói miễn phí của Atlas có dung lượng hạn chế.
+- **Index `deviceId` và `timestamp`** giúp truy vấn "bản ghi mới nhất" và "60 bản ghi gần nhất" (`sort({timestamp:-1})`) chạy nhanh.
+
+---
+
+**Câu 9. Nhận biết ESP32 Offline**
+
+Cách hiện tại: **watchdog phía trình duyệt**. Mỗi lần nhận telemetry, hook ghi lại `lastTelemetryTime` và đặt ESP32 = Online. Một `setInterval` chạy mỗi 1 giây, nếu `Date.now() - lastTelemetryTime > 7000` ms (tức mất khoảng 2 gói với chu kỳ 3 giây) thì đặt Offline. Ngưỡng này trước đây là 10 giây kiểm tra mỗi 3 giây, tôi đã hạ xuống để phản hồi nhanh hơn. Nếu Socket.io mất kết nối tới server thì cũng đặt Offline.
+
+*Nhược điểm:*
+- Phải chờ hết ngưỡng mới biết, nên luôn có độ trễ 7–8 giây.
+- Có thể báo nhầm nếu mạng chậm và gói đến trễ.
+- Nó chỉ suy luận từ việc không có dữ liệu. Web không phân biệt được "ESP32 tắt" với "backend hoặc broker lỗi".
+
+*Cải tiến:* dùng **MQTT Last Will and Testament (LWT)**. ESP32 đăng ký sẵn với broker một tin "offline" trên topic `status`. Khi ESP32 mất kết nối đột ngột, broker tự publish tin đó. Backend bắt tin và báo web ngay lập tức. Ngược lại, khi ESP32 kết nối lại thì nó publish tin "online" (retained). Cách này cần sửa firmware và thêm xử lý topic `status` ở backend.
+
+---
+
+**Câu 10. Đưa lên tên miền thật và rủi ro bảo mật**
+
+*Cần đổi:*
+1. Frontend: đặt `VITE_API_URL` và `VITE_SOCKET_URL` trỏ tới domain backend, rồi chạy lại `npm run build` vì biến `VITE_*` được nhúng vào lúc build, sau đó đưa thư mục `dist` lên hosting.
+2. Backend: đặt `CORS_ORIGIN` bằng domain frontend, để chỉ domain đó được gọi API và Socket.io.
+3. Dùng **HTTPS** cho cả API và Socket.io, thường qua Nginx hoặc Cloudflare làm reverse proxy, nhớ cho phép WebSocket đi qua. Trang https gọi tới http sẽ bị trình duyệt chặn (mixed content).
+4. Trong MongoDB Atlas, thêm IP của máy chủ vào Network Access.
+5. Chạy backend bền vững (PM2 hoặc systemd) thay vì mở terminal.
+
+*Rủi ro bảo mật hiện tại:*
+- `POST /control` **không có xác thực**, ai biết địa chỉ đều có thể gửi lệnh xuống thiết bị thật.
+- `backend/.env` chứa mật khẩu MongoDB và MQTT dạng plaintext, cần loại khỏi Git và đổi mật khẩu sau khi chia sẻ.
+- CORS mặc định là `*`, cho phép mọi nguồn.
+- Chưa có giới hạn tần suất (rate limit), và chưa kiểm tra dữ liệu đầu vào của `/control` (ví dụ `pwm` ngoài khoảng 0–4095).
+- Hướng khắc phục: thêm đăng nhập hoặc API key/JWT, giới hạn CORS, kiểm tra input, dùng secret manager hoặc biến môi trường trên máy chủ.
+
+---
+
+**Các câu hỏi "gài"**
+
+- **Rút mạng backend 5 phút thì dữ liệu có mất không?** Có, các gói telemetry trong thời gian đó không được lưu. Backend kết nối MQTT với `clean: true` và subscribe QoS 0, nên broker không giữ lại tin cho nó. Sau 5 giây, `reconnectPeriod` tự kết nối lại và tiếp tục nhận từ lúc đó. Muốn không mất dữ liệu, ESP32 phải tự đệm lại, hoặc backend dùng session bền (`clean: false`, client ID cố định) với QoS ≥ 1.
+- **Số "Telemetry Latency" trên web đo cái gì?** Nó bằng thời điểm web nhận trừ `timestamp` của gói. ESP32 hiện không gửi `timestamp` dạng mili-giây epoch nên backend gán bằng giờ nhận của server (kiểm tra cho thấy `timestamp` và `createdAt` lệch chỉ 1 ms). Vì thế số này chỉ đo đoạn server → web, không phải ESP32 → web.
+- **"Command Response" đo cái gì?** Đo từ lúc bấm lệnh đến lúc nhận **gói telemetry kế tiếp**, nên luôn dao động 0–3 giây theo chu kỳ gửi, và không phải thời gian thực thi thực sự của thiết bị.
+
+Nếu bạn muốn, tôi có thể đóng vai giảng viên: hỏi từng câu, để bạn tự trả lời rồi chấm và chỉ ra chỗ còn hổng.
+
+
+{
+    Phần này là khái niệm publish/subscribe của MQTT.
+Ví dụ dễ hiểu
+
+MQTT giống một kênh YouTube:
+- **Broker (HiveMQ)** là nền tảng YouTube.
+- **Topic** là tên kênh, ví dụ `hcmute/iot/climate/telemetry`.
+- **Publish** là người làm kênh đăng video. Ở đây ESP32 đăng một gói dữ liệu cảm biến lên topic.
+- **Subscribe** là bấm "Đăng ký kênh". Ai đăng ký kênh nào thì khi có video mới, nền tảng tự gửi cho người đó.
+
+ESP32 và backend không kết nối trực tiếp với nhau. Cả hai chỉ nói chuyện với broker.
+
+**"Backend subscribe telemetry" nghĩa là gì**
+
+Khi backend khởi động, nó kết nối tới HiveMQ rồi nói với broker: "Tôi muốn nhận mọi tin nào được đăng lên topic `telemetry`". Sau đó, mỗi lần ESP32 publish một gói lên topic này, broker tự chuyển bản sao cho backend. Backend không phải hỏi đi hỏi lại "có dữ liệu mới chưa".
+
+Trong [mqtt.js](backend/config/mqtt.js) có hai đoạn thể hiện điều này:
+
+```js
+// dòng 34: đăng ký nhận tin từ 3 topic
+mqttClient.subscribe([TOPIC_TELEMETRY, TOPIC_STATUS, TOPIC_CONTROL], ...)
+
+// dòng 43: hàm chạy MỖI KHI có tin mới về
+mqttClient.on('message', async (topic, message) => {
+  if (topic === TOPIC_TELEMETRY) { ... lưu MongoDB, phát Socket.io ... }
+});
+```
+
+**Còn "QoS 0" ở chỗ subscribe**
+
+Khi subscribe, ta có thể chọn mức đảm bảo mà broker phải giao tin cho mình. Code không ghi mức nào nên MQTT dùng mặc định **QoS 0**, nghĩa là broker gửi một lần và không xác nhận. Nếu lúc đó backend đang mất mạng thì gói đó bị bỏ. Với dữ liệu cảm biến gửi 3 giây một lần, mất một gói không ảnh hưởng nhiều.
+
+**Hai chiều của dự án**
+
+| Chiều | Ai publish | Ai subscribe | Topic |
+|---|---|---|---|
+| Dữ liệu cảm biến | ESP32 | Backend | `.../telemetry` |
+| Lệnh điều khiển | Backend | ESP32 | `.../control` |
+
+Vì vậy "backend subscribe telemetry" là chiều thứ nhất, backend nhận dữ liệu từ ESP32. Chiều thứ hai thì ngược lại, ESP32 mới là bên subscribe topic `control`.
+
+Nếu bạn muốn, tôi có thể vẽ sơ đồ chữ luồng publish/subscribe của cả hai chiều để bạn dùng khi trả lời giảng viên.
+}

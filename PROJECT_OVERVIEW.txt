@@ -1,0 +1,524 @@
+==========================================================================
+  HỆ THỐNG GIÁM SÁT MÔI TRƯỜNG & ĐIỀU HÒA VI KHÍ HẬU (IoT) - TỔNG QUAN
+==========================================================================
+
+MỤC LỤC
+  1. Dự án làm gì
+  2. Kiến trúc & luồng hoạt động
+  3. Cấu trúc thư mục
+  4. Chi tiết BACKEND (từng folder, từng file)
+  5. Chi tiết FRONTEND (từng folder, từng file)
+  6. Định dạng dữ liệu (MQTT / MongoDB / REST / Socket.io)
+  7. Cách chạy dự án
+  8. Cấu hình biến môi trường & cập nhật tên miền
+  9. Lưu ý / hạn chế hiện tại
+ 10. Nhật ký kiểm tra & chỉnh sửa (2026-09-27)
+
+
+--------------------------------------------------------------------------
+1. DỰ ÁN LÀM GÌ
+--------------------------------------------------------------------------
+Một trạm vi khí hậu dùng vi điều khiển ESP32, gồm:
+  - Trong nhà : 1 cảm biến nhiệt ẩm DHT22, 1 cảm biến ánh sáng BH1750,
+                1 cảm biến hiện diện PIR.
+  - Ngoài trời: 1 DHT22, 1 BH1750 (dùng làm mốc tham chiếu).
+  - Cơ cấu chấp hành: 1 quạt DC (PWM 12-bit, 0-4095), 1 đèn trần bù sáng
+    (PWM 12-bit), 1 đèn bàn học (bật/tắt, GPIO 32 qua MOSFET).
+  - Hai chế độ: AUTO (ESP32 tự quyết định) và MANUAL (người dùng điều khiển).
+
+Phần trong thư mục này là "trạm điều khiển trên máy chủ + web dashboard":
+  - Backend  (Node.js): nhận dữ liệu từ ESP32 qua MQTT, lưu MongoDB, đẩy
+    realtime lên web, và chuyển lệnh điều khiển từ web xuống ESP32.
+  - Frontend (React)  : giao diện web hiển thị số liệu, biểu đồ, cảnh báo và
+    điều khiển thiết bị.
+
+Mã nguồn firmware ESP32 nằm ở firmware/Final_Test_Final/ (giải thích chi
+tiết trong Firmware_Explanation.txt).
+
+
+--------------------------------------------------------------------------
+2. KIẾN TRÚC & LUỒNG HOẠT ĐỘNG
+--------------------------------------------------------------------------
+
+   [ ESP32 + cảm biến + quạt/đèn ]
+        |   ^
+        |   |  (MQTT over TLS, cổng 8883)
+        v   |
+   [ HiveMQ Cloud (MQTT Broker) ]
+        |   ^
+        |   |  subscribe telemetry   /   publish control
+        v   |
+   [ BACKEND Node.js (Express + MQTT client + Socket.io) ]----> [ MongoDB Atlas ]
+        |   ^
+        |   |  Socket.io: sự kiện "telemetry_update" (realtime)
+        |   |  REST API : /api/v1/... (lịch sử, lệnh điều khiển, health)
+        v   |
+   [ FRONTEND React (trình duyệt) ]
+
+2.1. LUỒNG DỮ LIỆU CẢM BIẾN (ESP32 -> Web)
+  Bước 1. ESP32 đọc cảm biến, publish JSON lên topic
+          hcmute/iot/climate/telemetry (khoảng 3 giây/lần theo dữ liệu đã lưu).
+  Bước 2. Backend (config/mqtt.js) đang subscribe topic đó, nhận message và
+          parse JSON. Các trường thiếu được gán mặc định; Heat Index được tự
+          tính nếu ESP32 không gửi.
+  Bước 3. Backend tạo bản ghi theo model Telemetry và lưu vào MongoDB.
+  Bước 4. Ngay sau khi lưu, backend phát sự kiện Socket.io "telemetry_update"
+          kèm bản ghi vừa lưu tới TẤT CẢ web client đang mở.
+  Bước 5. Frontend (hooks/useTelemetry.js) nhận sự kiện, cập nhật số liệu,
+          thêm điểm vào biểu đồ (giữ tối đa 60 điểm), đánh dấu ESP32 Online,
+          ghi log và tính độ trễ.
+
+2.2. LUỒNG TẢI LỊCH SỬ (khi mở web)
+  Frontend gọi GET /api/v1/telemetry/history?limit=60 -> backend đọc 60 bản
+  ghi mới nhất từ MongoDB -> frontend vẽ sẵn biểu đồ và lấy bản ghi cuối làm
+  số liệu hiện tại. Sau đó các điểm mới đến từ Socket.io.
+
+2.3. LUỒNG ĐIỀU KHIỂN (Web -> ESP32)
+  Bước 1. Người dùng bấm nút hoặc kéo thanh trượt trong ActuatorControls.
+  Bước 2. useTelemetry.sendCommand cập nhật giao diện NGAY (optimistic update)
+          rồi gọi POST /api/v1/control với JSON dạng
+          { actuator, state, pwm, mode }.
+  Bước 3. Backend (telemetryController.sendControl) publish JSON đó lên topic
+          hcmute/iot/climate/control (QoS 1).
+  Bước 4. ESP32 subscribe topic control, thực thi lệnh, rồi tiếp tục gửi
+          telemetry với trạng thái mới. Trạng thái thật sẽ đồng bộ lại lên
+          web qua bước 2.1.
+  Ghi chú: kéo thanh trượt được điều tiết (throttle) khoảng 60ms/lệnh.
+  Khi đang kéo, giao diện không bị dữ liệu từ server ghi đè ngược lại.
+
+2.4. GIÁM SÁT TRẠNG THÁI KẾT NỐI
+  - Internet : dựa vào navigator.onLine của trình duyệt.
+  - Socket   : đèn báo theo sự kiện connect/disconnect của Socket.io.
+  - ESP32    : Online khi có telemetry mới; watchdog (kiểm tra mỗi 1 giây)
+               chuyển sang Offline nếu quá 7 giây không có gói tin
+               (hằng số ESP_OFFLINE_TIMEOUT_MS trong useTelemetry.js).
+  - Backend  : GET /api/v1/health trả trạng thái MongoDB và MQTT.
+
+
+--------------------------------------------------------------------------
+3. CẤU TRÚC THƯ MỤC
+--------------------------------------------------------------------------
+Final_Project/
+|-- PROJECT_OVERVIEW.txt      (file này)
+|-- .gitignore                chặn .env, secrets.h, node_modules, dist khi đưa lên GitHub
+|-- NoteBE.txt                ghi chú nhanh về backend
+|-- NoteFE.txt                sơ đồ luồng + cây thư mục frontend
+|-- Firmware_Explanation.txt  giải thích firmware ESP32
+|-- Chú ý tải cấu hình.txt    hướng dẫn cài đặt + câu hỏi ôn tập
+|-- firmware/
+|   `-- Final_Test_Final/     (thư mục sketch Arduino, tên phải trùng tên file .ino)
+|       |-- Final_Test_Final.ino
+|       |-- secrets.h           WiFi + tài khoản MQTT THẬT (không đưa lên GitHub)
+|       `-- secrets.example.h   bản mẫu của secrets.h
+|-- backend/
+|   |-- server.js
+|   |-- package.json, package-lock.json
+|   |-- .env, .env.example
+|   |-- config/       db.js, mqtt.js, cors.js
+|   |-- controllers/  telemetryController.js
+|   |-- models/       Telemetry.js
+|   |-- routes/       api.js
+|   |-- sockets/      socketHandler.js
+|   `-- node_modules/ (tự sinh khi chạy npm install)
+`-- frontend/
+    |-- index.html
+    |-- package.json
+    |-- vite.config.js, tailwind.config.js, postcss.config.js
+    |-- .env, .env.example
+    |-- src/
+    |   |-- main.jsx, App.jsx, App_VER1.jsx, App_VER2.jsx, index.css
+    |   |-- components/  (6 component giao diện)
+    |   |-- hooks/       useTelemetry.js
+    |   `-- services/    api.js, socket.js
+    `-- node_modules/ (tự sinh khi chạy npm install)
+
+
+--------------------------------------------------------------------------
+4. CHI TIẾT BACKEND
+--------------------------------------------------------------------------
+Công nghệ: Node.js (CommonJS), Express 5, Mongoose 9 (MongoDB), mqtt 5,
+Socket.io 4, dotenv, cors.
+
+4.1. File ở thư mục gốc backend/
+  server.js
+      Điểm khởi động. Thứ tự: nạp .env -> tạo Express + HTTP server -> bật
+      CORS và đọc JSON -> kết nối MongoDB -> khởi tạo Socket.io -> kết nối
+      MQTT -> gắn route /api/v1 -> lắng nghe cổng PORT (mặc định 5000).
+      Đầu file ép DNS dùng 8.8.8.8 / 8.8.4.4 (giúp phân giải địa chỉ
+      mongodb+srv trên một số mạng bị lỗi DNS).
+  package.json
+      Khai báo thư viện và lệnh: "npm start" và "npm run dev" đều chạy
+      node server.js.
+  package-lock.json
+      Khóa chính xác phiên bản thư viện, đảm bảo máy khác cài giống nhau.
+  .env
+      Cấu hình thật và bí mật (chuỗi kết nối MongoDB, tài khoản MQTT...).
+      Không nên đưa lên GitHub hay gửi công khai.
+  .env.example
+      Bản mẫu không chứa mật khẩu, để người khác biết cần điền những biến nào.
+
+4.2. Thư mục backend/config/  (cấu hình và kết nối dịch vụ ngoài)
+  db.js
+      connectDB(): kết nối MongoDB bằng MONGODB_URI. Nếu thiếu biến thì chỉ
+      cảnh báo. Nếu kết nối thất bại thì thoát tiến trình (exit 1).
+  mqtt.js
+      Trung tâm xử lý MQTT.
+      - connectMQTT(): kết nối HiveMQ Cloud (TLS, tự kết nối lại sau 5 giây),
+        subscribe 3 topic: telemetry, status, control. Địa chỉ broker lấy từ
+        MQTT_BROKER_URL trong .env (bắt buộc; thiếu thì chỉ cảnh báo và bỏ
+        qua MQTT).
+      - Khi có message ở topic telemetry: parse JSON (chấp nhận cả khóa
+        "indoor"/"in" và "outdoor"/"out"), chuẩn hóa số liệu, tính chênh
+        lệch, in log ra console, lưu MongoDB, rồi emit "telemetry_update".
+      - calculateHeatIndex(): công thức tính chỉ số nóng bức từ nhiệt độ và
+        độ ẩm khi ESP32 không gửi sẵn.
+      - Xuất ra: connectMQTT, getMQTTClient (để controller publish lệnh),
+        TOPIC_CONTROL.
+  cors.js
+      getAllowedOrigins(): đọc biến CORS_ORIGIN để giới hạn domain được gọi
+      API/Socket. Bỏ trống hoặc "*" = cho phép tất cả.
+
+4.3. Thư mục backend/models/  (cấu trúc dữ liệu MongoDB)
+  Telemetry.js
+      Schema một bản ghi telemetry: deviceId, timestamp, indoor (nhiệt độ,
+      độ ẩm, heatIndex, lux, motion 0/1), outdoor (nhiệt độ, độ ẩm,
+      heatIndex, lux), actuators (fanState, fanPwm, ledState, ledPwm,
+      ledDeskState; PWM giới hạn 0-4095), mode (AUTO/MANUAL).
+      Có index theo deviceId và timestamp để truy vấn nhanh. Có TTL index:
+      MongoDB tự xóa bản ghi sau 30 ngày (dựa vào createdAt).
+
+4.4. Thư mục backend/controllers/  (xử lý logic cho từng API)
+  telemetryController.js
+      getHealth   : trả trạng thái server, MongoDB, MQTT.
+      getLatest   : trả bản ghi mới nhất (404 nếu chưa có dữ liệu).
+      getHistory  : trả N bản ghi mới nhất (query limit, mặc định 60, giới
+                    hạn 1-500), sắp xếp từ cũ đến mới để frontend vẽ biểu đồ.
+      sendControl : nhận { actuator, state, pwm, mode } từ web, kiểm tra hợp
+                    lệ rồi publish xuống topic control.
+                    - actuator: fan | led_indoor | led_in | led | led_desk |
+                      led_outdoor | led_out
+                    - state: ON | OFF (không phân biệt hoa thường)
+                    - pwm: số nguyên 0-4095
+                    - mode: AUTO | MANUAL
+                    Sai giá trị -> 400. MQTT chưa kết nối -> 503.
+
+4.5. Thư mục backend/routes/  (bảng định tuyến API)
+  api.js
+      Gắn đường dẫn với controller (tất cả nằm dưới tiền tố /api/v1):
+        GET  /health
+        GET  /telemetry/latest
+        GET  /telemetry/history?limit=60
+        POST /control
+
+4.6. Thư mục backend/sockets/  (realtime)
+  socketHandler.js
+      initSocket(server): tạo Socket.io server (áp dụng CORS), log khi client
+      kết nối/ngắt kết nối.
+      getIO(): cho module khác (mqtt.js) lấy đối tượng io để emit.
+      Hiện chỉ có một sự kiện phát ra: "telemetry_update" (server -> client).
+
+
+--------------------------------------------------------------------------
+5. CHI TIẾT FRONTEND
+--------------------------------------------------------------------------
+Công nghệ: React 18, Vite 5 (build/dev server), Tailwind CSS 3 (giao diện tối),
+Chart.js + react-chartjs-2 (biểu đồ), Axios (REST), socket.io-client
+(realtime), lucide-react (icon).
+
+5.1. File ở thư mục gốc frontend/
+  index.html
+      Trang HTML duy nhất (nạp font Inter và JetBrains Mono, chứa thẻ
+      <div id="root"> và nạp src/main.jsx).
+  package.json
+      Khai báo thư viện. Lệnh: npm run dev (chạy thử), npm run build (đóng
+      gói bản triển khai vào thư mục dist), npm run preview (xem thử bản build).
+  vite.config.js
+      Cấu hình Vite: bật plugin React, cổng dev 3000, host: true (cho phép
+      truy cập từ máy khác trong mạng LAN).
+  tailwind.config.js
+      Cho Tailwind biết quét class ở đâu (index.html, src/**) và khai báo
+      font Inter (chữ thường) / JetBrains Mono (số liệu).
+  postcss.config.js
+      Bật Tailwind và Autoprefixer khi xử lý CSS.
+  .env
+      Địa chỉ backend: VITE_API_URL và VITE_SOCKET_URL. Được nhúng vào lúc
+      build, nên đổi xong phải chạy lại/build lại.
+  .env.example
+      Bản mẫu của .env.
+
+5.2. Thư mục frontend/src/  (file chính)
+  main.jsx
+      Điểm vào của React: gắn <App /> vào #root và nạp index.css.
+  App.jsx
+      Chọn giao diện đang dùng. Hiện dùng App_VER2. Muốn đổi sang VER1 chỉ cần
+      đổi dòng import (đã có hướng dẫn trong file).
+  App_VER1.jsx
+      Giao diện kiểu cuộn một trang: Header -> Cảnh báo -> Biểu đồ -> Thẻ cảm
+      biến -> Điều khiển -> Độ trễ & Log.
+  App_VER2.jsx
+      Giao diện chia hai Tab: "ĐIỀU KHIỂN & THÔNG SỐ" (thẻ cảm biến + điều
+      khiển) và "BIỂU ĐỒ THỜI GIAN THỰC". Header, cảnh báo và khối độ trễ/log
+      luôn hiển thị.
+  index.css
+      Nạp Tailwind, thanh cuộn tối màu, hiệu ứng fadeIn khi đổi tab.
+
+5.3. Thư mục frontend/src/services/  (giao tiếp với backend)
+  api.js
+      Axios client (timeout 5 giây) với các hàm: getHealth,
+      getLatestTelemetry, getTelemetryHistory, sendControlCommand. Địa chỉ lấy
+      từ VITE_API_URL; nếu không có thì dùng <hostname-hiện-tại>:5000.
+  socket.js
+      Tạo kết nối Socket.io dùng chung (websocket, tự kết nối lại tối đa 10
+      lần, mỗi 2 giây). Địa chỉ lấy từ VITE_SOCKET_URL.
+
+5.4. Thư mục frontend/src/hooks/  (logic dùng chung)
+  useTelemetry.js
+      "Bộ não" của giao diện, cả App_VER1 và App_VER2 đều dùng. Quản lý:
+      - state: chế độ AUTO/MANUAL, số liệu trong/ngoài, trạng thái thiết bị.
+      - history: 60 điểm gần nhất cho biểu đồ.
+      - logs: nhật ký tối đa 100 dòng.
+      - Trạng thái Internet (lắng nghe sự kiện online/offline của trình
+        duyệt), Socket, ESP32 (watchdog 7 giây).
+      - Độ trễ telemetry (thời điểm nhận - timestamp của gói) và độ trễ lệnh
+        (từ lúc gửi lệnh đến gói telemetry kế tiếp).
+      - Khi mở trang: tải lịch sử từ REST (chỉ để vẽ biểu đồ và hiện số liệu
+        cuối, KHÔNG coi là ESP32 Online); sau đó lắng nghe "telemetry_update".
+      - sendCommand(): cập nhật giao diện tức thì rồi POST /control.
+      - Chế độ "Mô phỏng": khi bật, lệnh KHÔNG được gửi lên backend.
+
+5.5. Thư mục frontend/src/components/  (các khối giao diện)
+  Header.jsx
+      Tiêu đề hệ thống, nhãn phiên bản giao diện, đèn trạng thái Internet và
+      ESP32, đồng hồ "cập nhật X giây trước", nút bật/tắt chế độ mô phỏng.
+  AlarmBanner.jsx
+      Banner đỏ nhấp nháy khi vượt ngưỡng: trong nhà nhiệt độ > 35°C hoặc
+      Heat Index > 38; độ ẩm trong nhà > 85%; ngoài trời > 38°C. Không có
+      cảnh báo thì không hiển thị gì.
+  EnvironmentCards.jsx
+      Hai khối thẻ số liệu:
+      - Trong nhà: nhiệt độ/độ ẩm/Heat Index, ánh sáng (đánh giá "Tối" nếu
+        < 150 lux), hiện diện PIR.
+      - Ngoài trời: nhiệt độ/độ ẩm/Heat Index, ánh sáng (ngày/đêm theo mốc
+        500 lux), và chênh lệch trong-ngoài (Δ nhiệt, Δ ẩm, Δ sáng).
+  ActuatorControls.jsx
+      Bảng điều khiển: công tắc AUTO/MANUAL; quạt DC và đèn trần (nút bật/tắt +
+      thanh trượt PWM 0-4095); đèn bàn (nút bật/tắt). Thao tác thủ công trên
+      thiết bị sẽ tự chuyển chế độ AUTO sang MANUAL. Tên thiết bị gửi đi:
+      "fan", "led_indoor", "led_desk".
+  RealtimeChart.jsx
+      Biểu đồ đường chọn theo 4 chỉ số: nhiệt độ, độ ẩm, ánh sáng, hiện diện.
+      Trong nhà là nét liền, ngoài trời là nét đứt; kèm giá trị trung bình
+      của 60 mẫu.
+  TelemetryConsole.jsx
+      Hiển thị 2 độ trễ (Telemetry Latency, Command Response), nút "Gửi Test
+      Ping", và khung nhật ký sự kiện có nút xóa log.
+
+
+--------------------------------------------------------------------------
+6. ĐỊNH DẠNG DỮ LIỆU
+--------------------------------------------------------------------------
+6.1. MQTT topic (mặc định, cấu hình trong backend/.env)
+  hcmute/iot/climate/telemetry  : ESP32 -> Backend (số liệu)
+  hcmute/iot/climate/control    : Backend -> ESP32 (lệnh)
+  hcmute/iot/climate/status     : dự phòng (backend có subscribe nhưng hiện
+                                  chưa xử lý nội dung)
+
+6.2. JSON telemetry mà backend mong đợi từ ESP32
+  {
+    "device_id": "ESP32_CLIMATE_NODE",
+    "mode": "AUTO",                         // hoặc "MANUAL"
+    "timestamp": 1757760000000,             // tùy chọn, mili-giây epoch
+    "indoor":  { "temperature": 30.6, "humidity": 78.5, "heat_index": 37.9,
+                 "lux": 64, "motion": 0 },
+    "outdoor": { "temperature": 30.5, "humidity": 77.2, "heat_index": 37.6,
+                 "lux": 72 },
+    "fan_state": "ON",  "fan_pwm": 2091,
+    "led_state": "OFF", "led_pwm": 0,
+    "led_desk_state": "OFF"
+  }
+  (heat_index có thể bỏ, backend sẽ tự tính. Khóa "in"/"out" được chấp nhận
+  thay cho "indoor"/"outdoor".)
+
+6.3. JSON lệnh điều khiển gửi xuống ESP32 (POST /api/v1/control)
+  { "actuator": "fan" | "led_indoor" | "led_desk",
+    "state": "ON" | "OFF",
+    "pwm": 0..4095,                         // chỉ quạt và đèn trần
+    "mode": "AUTO" | "MANUAL" }
+  Riêng nút đổi chế độ chỉ gửi { "mode": "AUTO" } hoặc { "mode": "MANUAL" }.
+
+6.4. Socket.io
+  Server -> Client: "telemetry_update" (nội dung là bản ghi MongoDB vừa lưu).
+
+6.5. REST API (tiền tố /api/v1)
+  GET  /health              -> { status, serverTime, mongoConnected, mqttConnected }
+  GET  /telemetry/latest    -> { success, data }
+  GET  /telemetry/history   -> { success, count, data: [...] }
+  POST /control             -> { success, message, payload }
+
+
+--------------------------------------------------------------------------
+7. CÁCH CHẠY DỰ ÁN
+--------------------------------------------------------------------------
+Yêu cầu: cài Node.js (bản LTS). Nếu nhận dự án không có node_modules thì phải
+chạy npm install ở CẢ HAI thư mục.
+
+  Backend (mở CMD 1):
+      cd backend
+      npm install
+      npm start
+    -> chạy tại http://localhost:5000 ; kiểm tra: http://localhost:5000/api/v1/health
+
+  Frontend (mở CMD 2):
+      cd frontend
+      npm install
+      npm run dev
+    -> chạy tại http://localhost:3000
+
+  Thứ tự: chạy backend trước, frontend sau.
+  Lỗi "EADDRINUSE ... :5000" nghĩa là backend đã chạy sẵn ở một cửa sổ khác
+  (hoặc chương trình khác chiếm cổng 5000). Hãy tắt bản cũ (Ctrl + C) rồi chạy lại.
+
+  Đóng gói bản triển khai frontend:  npm run build  (kết quả ở frontend/dist).
+
+  Firmware ESP32 (Arduino IDE):
+      1. Mở firmware/Final_Test_Final/Final_Test_Final.ino
+      2. Nếu chưa có secrets.h (vd. vừa clone từ GitHub): copy
+         secrets.example.h thành secrets.h rồi điền WiFi + tài khoản MQTT.
+      3. Thư viện cần cài: PubSubClient, ArduinoJson, BH1750, DHT sensor
+         library (Adafruit). Board: ESP32 (core 2.x hoặc 3.x đều được).
+
+  Người clone từ GitHub cũng phải tự tạo backend/.env và frontend/.env từ
+  file .env.example tương ứng (các file .env thật không được đưa lên).
+
+
+--------------------------------------------------------------------------
+8. BIẾN MÔI TRƯỜNG & CẬP NHẬT TÊN MIỀN
+--------------------------------------------------------------------------
+backend/.env
+  PORT                  cổng chạy backend (mặc định 5000)
+  MONGODB_URI           chuỗi kết nối MongoDB Atlas
+  MQTT_BROKER_URL       địa chỉ HiveMQ Cloud (mqtts://...:8883)
+  MQTT_USERNAME/PASSWORD  tài khoản HiveMQ
+  MQTT_TOPIC_TELEMETRY / _STATUS / _CONTROL   tên 3 topic
+  CORS_ORIGIN           (tùy chọn) domain frontend được phép gọi backend,
+                        cách nhau bằng dấu phẩy. Bỏ trống = cho phép tất cả.
+
+frontend/.env
+  VITE_API_URL          địa chỉ REST API, ví dụ http://localhost:5000/api/v1
+  VITE_SOCKET_URL       địa chỉ Socket.io, ví dụ http://localhost:5000
+
+Khi có tên miền, ví dụ frontend tại iot.example.com, backend tại
+api.example.com:
+  frontend/.env :  VITE_API_URL=https://api.example.com/api/v1
+                   VITE_SOCKET_URL=https://api.example.com
+  backend/.env  :  CORS_ORIGIN=https://iot.example.com
+Sau đó chạy lại "npm run build" cho frontend và khởi động lại backend. Dùng
+https thì cả API và Socket.io đều phải là https (thường đặt Nginx/Cloudflare
+phía trước để lo chứng chỉ SSL và chuyển tiếp WebSocket).
+
+Nếu MongoDB Atlas giới hạn IP (Network Access), cần thêm IP của máy/máy chủ
+chạy backend vào danh sách cho phép.
+
+
+--------------------------------------------------------------------------
+9. LƯU Ý / HẠN CHẾ HIỆN TẠI
+--------------------------------------------------------------------------
+  - Bảo mật: backend/.env và firmware/.../secrets.h chứa mật khẩu MongoDB,
+    MQTT, WiFi dạng plaintext. Cả hai đã nằm trong .gitignore nên không bị
+    đưa lên GitHub, nhưng vẫn nên đổi mật khẩu sau khi nộp bài hoặc chia sẻ
+    (mật khẩu MQTT hiện tại rất yếu). Backend cũng chưa có xác
+    thực cho API /control (ai gọi được API đều gửi được lệnh).
+  - QoS: NoteBE.txt ghi QoS 0. Thực tế: backend publish lệnh lên broker với
+    QoS 1, nhưng firmware subscribe topic control bằng
+    client.subscribe(TOPIC_CONTROL) (PubSubClient mặc định QoS 0), nên
+    chặng broker -> ESP32 thực chất là QoS 0 (MQTT lấy mức thấp hơn).
+    Telemetry ESP32 -> broker -> backend cũng là QoS 0.
+  - Nút "Test UI (Mô phỏng Dữ liệu)": hiện chỉ chặn việc gửi lệnh lên backend
+    và đặt độ trễ lệnh giả là 25ms; chưa sinh dữ liệu cảm biến giả.
+  - Nút "Gửi Test Ping": gọi POST /control với { ping }, backend chỉ lấy
+    các trường actuator/state/pwm/mode nên publish JSON rỗng {} xuống topic
+    control. Firmware parse được {} (không làm gì) rồi publish ngay 1 gói
+    telemetry, nên "Command Response" đo được đúng vòng Web -> ESP32 -> Web.
+  - Độ trễ telemetry chính xác chỉ khi ESP32 gửi "timestamp" là mili-giây
+    epoch. Nếu không gửi, backend dùng giờ nhận của server nên số đo phản ánh
+    đoạn Server -> Web, không phải ESP32 -> Web.
+  - Chưa có gói ACK riêng cho từng lệnh. Tuy nhiên firmware publish 1 gói
+    telemetry NGAY sau mỗi lệnh nhận được (cuối hàm mqttCallback), nên gói
+    đó đóng vai trò xác nhận trạng thái thật.
+  - Hệ quả của điểm trên: khi kéo thanh trượt (~16 lệnh/giây), ESP32 cũng
+    gửi ~16 gói telemetry/giây -> backend lưu từng gói vào MongoDB và biểu
+    đồ 60 điểm bị lấp đầy bởi các điểm gần như trùng nhau. Xem đề xuất ở
+    mục 10.3.
+  - Khi chưa nhận được dữ liệu, giao diện hiển thị số liệu mẫu ban đầu
+    (28.4°C, 65%, ...) cho đến khi tải xong lịch sử hoặc có gói tin mới.
+  - Dữ liệu tự bị xóa sau 30 ngày (TTL index). Nếu ESP32 tắt, dữ liệu cuối
+    cùng trong DB vẫn được hiển thị nhưng đèn ESP32 sẽ báo Offline.
+  - Topic "status" đã được subscribe nhưng backend chưa có mã xử lý, dù
+    firmware ĐÃ gửi sẵn: {"status":"ONLINE"} (retained) khi kết nối và Last
+    Will {"status":"OFFLINE"} khi mất kết nối. getHealth trong api.js cũng
+    chưa được component nào gọi.
+
+
+--------------------------------------------------------------------------
+10. NHẬT KÝ KIỂM TRA & CHỈNH SỬA (2026-09-27)
+--------------------------------------------------------------------------
+Đã kiểm tra: toàn bộ backend, frontend, firmware. Sau khi sửa: frontend
+"npm run build" thành công, các file backend qua "node --check", API
+/control đã chạy thử với payload hợp lệ và không hợp lệ.
+
+10.1. BẢO MẬT (chuẩn bị đưa lên GitHub)
+  [1] Firmware ghi cứng mật khẩu WiFi + tài khoản MQTT ngay trong file .ino.
+      -> Chuyển .ino vào firmware/Final_Test_Final/ (cấu trúc sketch chuẩn
+         của Arduino) và tách 5 hằng WIFI_SSID, WIFI_PASS, MQTT_BROKER,
+         MQTT_USER, MQTT_PASS sang secrets.h (không đưa lên GitHub). Thêm
+         secrets.example.h làm mẫu. Logic firmware giữ nguyên.
+  [2] Firmware_Explanation.txt chép lại mật khẩu WiFi và địa chỉ broker.
+      -> Thay bằng ghi chú "khai báo trong secrets.h".
+  [3] Chưa có .gitignore: .env (chứa mật khẩu MongoDB/MQTT) và
+      node_modules (~11.000 file) sẽ bị đẩy lên GitHub.
+      -> Thêm .gitignore ở thư mục gốc (giữ lại các file .env.example).
+  [4] backend/config/mqtt.js có địa chỉ broker HiveMQ ghi cứng làm giá trị
+      mặc định. -> Bỏ; chỉ đọc từ MQTT_BROKER_URL trong .env.
+
+10.2. LỖI ĐÃ SỬA
+  [5] Đèn "Internet" trên Header không bao giờ đổi trạng thái (chỉ đọc
+      navigator.onLine một lần lúc mở trang).
+      -> useTelemetry.js: lắng nghe sự kiện online/offline, có ghi log.
+  [6] Khi mở trang, bản ghi cuối trong MongoDB bị xử lý như gói live:
+      - ESP32 báo "Online" ~7 giây dù thiết bị có thể đã tắt từ lâu;
+      - "Telemetry Latency" hiện số rất lớn (tuổi của bản ghi cũ);
+      - điểm cuối cùng bị vẽ 2 lần trên biểu đồ; log ghi nhầm "[Live Data]".
+      -> useTelemetry.js: tách hàm normalizeRecord(); bản ghi lịch sử chỉ
+         dùng để hiện số liệu, không đổi trạng thái Online/độ trễ/biểu đồ.
+  [7] Thanh trượt quạt/đèn: lệnh "gửi bù" đặt bằng setTimeout không bị hủy
+      khi có lệnh mới gửi ngay, nên có thể bắn ra SAU lệnh mới với giá trị
+      CŨ -> thả tay xong thiết bị dừng ở mức PWM sai.
+      -> ActuatorControls.jsx: hủy timer đang chờ trước khi gửi lệnh mới.
+  [8] Biểu đồ: tab Độ ẩm/Ánh sáng hiện "NaN %" / "NaN Lux" khi chưa có dữ
+      liệu; nhãn "1 Giờ (60 mẫu)" và "TB 1h" sai (60 mẫu x 3 giây ~ 3 phút).
+      -> RealtimeChart.jsx: hiện "--" khi trống; đổi nhãn thành "60 mẫu gần
+         nhất (~3 phút)" và "TB 60 mẫu".
+  [9] backend/package.json khai báo "scripts" 2 lần và "main" trỏ tới
+      index.js không tồn tại. -> Gộp còn một khối, main = server.js.
+  [10] GET /telemetry/history không giới hạn limit (vd. limit=1000000 sẽ đọc
+      toàn bộ DB). -> Giới hạn 1-500.
+  [11] POST /control không kiểm tra dữ liệu: pwm="abc" thành null, pwm=5000
+      hay actuator lạ vẫn được gửi xuống ESP32; gửi request không có body
+      làm server lỗi 500. -> Kiểm tra actuator/state/pwm/mode, sai trả 400
+      kèm thông báo; state/mode tự chuyển về chữ hoa.
+
+10.3. ĐỀ XUẤT CHƯA THỰC HIỆN (cần thống nhất với nhóm / cần test trên mạch)
+  - Firmware: giới hạn tần suất gói telemetry phản hồi lệnh (vd. tối đa 1
+    gói / 300 ms) để tránh ngập MongoDB và biểu đồ khi kéo thanh trượt.
+    Chưa sửa vì cần nạp lên ESP32 thật để kiểm tra.
+  - Đổi mật khẩu WiFi, MQTT và MongoDB: repo GitHub đang công khai và đã
+    lộ các mật khẩu này (file Final_Test_Final.ino ở gốc repo và file
+    backend/.env trong lịch sử commit cũ). Đổi mật khẩu xong thì cập nhật
+    backend/.env và firmware/Final_Test_Final/secrets.h trên máy.
+  - Thêm xác thực (API key/JWT) cho POST /control.
+  - Backend xử lý topic "status" (LWT) để báo ESP32 Offline tức thì thay vì
+    chờ watchdog 7 giây.
+  - Firmware dùng API cũ của ArduinoJson (StaticJsonDocument,
+    createNestedObject, containsKey): vẫn biên dịch được với ArduinoJson 7
+    nhưng có cảnh báo "deprecated".
+==========================================================================

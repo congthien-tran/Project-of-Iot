@@ -88,7 +88,7 @@ tiết trong Firmware_Explanation.txt).
 
 2.4. GIÁM SÁT TRẠNG THÁI KẾT NỐI
   - Internet : dựa vào navigator.onLine của trình duyệt.
-  - Socket   : đèn báo theo sự kiện connect/disconnect của Socket.io.
+  - Máy Chủ  : đèn báo theo sự kiện connect/disconnect của Socket.io.
   - ESP32    : Online khi có telemetry mới; watchdog (kiểm tra mỗi 1 giây)
                chuyển sang Offline nếu quá 7 giây không có gói tin
                (hằng số ESP_OFFLINE_TIMEOUT_MS trong useTelemetry.js).
@@ -284,12 +284,13 @@ Chart.js + react-chartjs-2 (biểu đồ), Axios (REST), socket.io-client
       - Khi mở trang: tải lịch sử từ REST (chỉ để vẽ biểu đồ và hiện số liệu
         cuối, KHÔNG coi là ESP32 Online); sau đó lắng nghe "telemetry_update".
       - sendCommand(): cập nhật giao diện tức thì rồi POST /control.
-      - Chế độ "Mô phỏng": khi bật, lệnh KHÔNG được gửi lên backend.
 
 5.5. Thư mục frontend/src/components/  (các khối giao diện)
   Header.jsx
-      Tiêu đề hệ thống, nhãn phiên bản giao diện, đèn trạng thái Internet và
-      ESP32, đồng hồ "cập nhật X giây trước", nút bật/tắt chế độ mô phỏng.
+      Tiêu đề hệ thống, 3 đèn trạng thái theo thứ tự Internet -> Máy Chủ ->
+      ESP32, và đồng hồ "cập nhật X giây trước".
+      - Máy Chủ: Online khi trình duyệt đang kết nối Socket.io tới backend
+        (isSocketConnected trong useTelemetry.js), Offline khi mất kết nối.
   AlarmBanner.jsx
       Banner đỏ nhấp nháy khi vượt ngưỡng: trong nhà nhiệt độ > 35°C hoặc
       Heat Index > 38; độ ẩm trong nhà > 85%; ngoài trời > 38°C. Không có
@@ -433,8 +434,6 @@ chạy backend vào danh sách cho phép.
     client.subscribe(TOPIC_CONTROL) (PubSubClient mặc định QoS 0), nên
     chặng broker -> ESP32 thực chất là QoS 0 (MQTT lấy mức thấp hơn).
     Telemetry ESP32 -> broker -> backend cũng là QoS 0.
-  - Nút "Test UI (Mô phỏng Dữ liệu)": hiện chỉ chặn việc gửi lệnh lên backend
-    và đặt độ trễ lệnh giả là 25ms; chưa sinh dữ liệu cảm biến giả.
   - Nút "Gửi Test Ping": gọi POST /control với { ping }, backend chỉ lấy
     các trường actuator/state/pwm/mode nên publish JSON rỗng {} xuống topic
     control. Firmware parse được {} (không làm gì) rồi publish ngay 1 gói
@@ -521,4 +520,13 @@ chạy backend vào danh sách cho phép.
   - Firmware dùng API cũ của ArduinoJson (StaticJsonDocument,
     createNestedObject, containsKey): vẫn biên dịch được với ArduinoJson 7
     nhưng có cảnh báo "deprecated".
+
+10.4. CẬP NHẬT GIAO DIỆN (Header)
+  - Thêm đèn trạng thái "Máy Chủ" giữa "Internet" và "ESP32" (theo kết nối
+    Socket.io tới backend). Giúp phân biệt: Máy Chủ Offline = backend không
+    chạy / không truy cập được; Máy Chủ Online nhưng ESP32 Offline = backend
+    ổn, thiết bị ESP32 không gửi dữ liệu.
+  - Bỏ nút "Test UI (Mô phỏng Dữ liệu)" và toàn bộ logic mô phỏng trong
+    useTelemetry.js (isSimulating, toggleSimulation).
+  - Bỏ nhãn phiên bản ("Bản VER1/VER2 ...") cạnh tiêu đề.
 ==========================================================================

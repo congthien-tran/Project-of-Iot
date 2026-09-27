@@ -55,7 +55,6 @@ export const useTelemetry = () => {
   const [lastTelemetryTime, setLastTelemetryTime] = useState(null);
   const [telemetryLatency, setTelemetryLatency] = useState(null);
   const [commandLatency, setCommandLatency] = useState(null);
-  const [isSimulating, setIsSimulating] = useState(false);
 
   const [state, setState] = useState({
     mode: 'AUTO',
@@ -261,19 +260,12 @@ export const useTelemetry = () => {
       };
     });
 
-    if (isSimulating) {
-      setCommandLatency(25);
-      return;
-    }
-
     try {
       await sendControlCommand(payload);
     } catch (err) {
       addLog(`[Lỗi Gửi Lệnh] ${err.response?.data?.error || err.message}`);
     }
   };
-
-  const toggleSimulation = () => setIsSimulating((prev) => !prev);
 
   return {
     state,
@@ -286,8 +278,6 @@ export const useTelemetry = () => {
     lastTelemetryTime,
     telemetryLatency,
     commandLatency,
-    sendCommand,
-    isSimulating,
-    toggleSimulation
+    sendCommand
   };
 };

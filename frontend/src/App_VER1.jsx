@@ -14,12 +14,10 @@ export default function App_VER1() {
     <div className="bg-slate-950 text-slate-100 min-h-screen p-3 sm:p-5 lg:p-7 antialiased selection:bg-indigo-500 selection:text-white">
       {/* 1. Header */}
       <Header
-        versionLabel="Bản VER1 (Cuộn Toàn Trang)"
         isInternetOnline={telemetry.isInternetOnline}
+        isServerOnline={telemetry.isSocketConnected}
         isEspOnline={telemetry.isEspOnline}
         lastTelemetryTime={telemetry.lastTelemetryTime}
-        isSimulating={telemetry.isSimulating}
-        onToggleSimulation={telemetry.toggleSimulation}
       />
 
       {/* 2. Cảnh báo tổng */}

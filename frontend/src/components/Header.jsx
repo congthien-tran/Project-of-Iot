@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Home, Clock, Play, Square } from 'lucide-react';
+import { Home, Clock } from 'lucide-react';
 
 export const Header = ({
-  versionLabel,
   isInternetOnline,
+  isServerOnline,
   isEspOnline,
-  lastTelemetryTime,
-  isSimulating,
-  onToggleSimulation
+  lastTelemetryTime
 }) => {
   const [freshness, setFreshness] = useState('Chưa có tin');
 
@@ -30,14 +28,9 @@ export const Header = ({
           <Home className="w-7 h-7" />
         </div>
         <div className="flex flex-col items-center">
-          <div className="flex items-center justify-center gap-2 flex-wrap">
-            <h1 className="text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight text-white">
-              HỆ THỐNG GIÁM SÁT MÔI TRƯỜNG & ĐIỀU HÒA VI KHÍ HẬU
-            </h1>
-            <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
-              {versionLabel || '1 Phòng: Trong Nhà & Ngoài Trời'}
-            </span>
-          </div>
+          <h1 className="text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight text-white">
+            HỆ THỐNG GIÁM SÁT MÔI TRƯỜNG & ĐIỀU HÒA VI KHÍ HẬU
+          </h1>
           <p className="text-xs sm:text-sm text-slate-400 mt-1">
             2 Cảm biến Nhiệt Ẩm • 2 Cảm biến Ánh Sáng • 1 Hiện Diện PIR (Trong Nhà) | Nhóm ĐTV-02
           </p>
@@ -54,6 +47,14 @@ export const Header = ({
         </div>
 
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
+          <span className={`w-2.5 h-2.5 rounded-full ${isServerOnline ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+          <span className="text-slate-400 text-xs">Máy Chủ:</span>
+          <span className={`font-semibold text-xs ${isServerOnline ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {isServerOnline ? 'Online' : 'Offline'}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
           <span className={`w-2.5 h-2.5 rounded-full ${isEspOnline ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
           <span className="text-slate-400 text-xs">ESP32:</span>
           <span className={`font-semibold text-xs ${isEspOnline ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -66,16 +67,6 @@ export const Header = ({
           <span className="text-slate-400 text-xs">Cập nhật:</span>
           <span className="font-mono text-amber-400 font-medium text-xs">{freshness}</span>
         </div>
-
-        <button
-          onClick={onToggleSimulation}
-          className={`px-3.5 py-1.5 font-medium rounded-xl transition flex items-center gap-1.5 text-xs shadow-lg ${
-            isSimulating ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30' : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/30'
-          }`}
-        >
-          {isSimulating ? <Square className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-          <span>{isSimulating ? 'Dừng Mô Phỏng' : 'Test UI (Mô phỏng Dữ liệu)'}</span>
-        </button>
       </div>
     </header>
   );

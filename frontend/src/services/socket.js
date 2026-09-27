@@ -7,6 +7,8 @@ export const socket = io(SOCKET_URL, {
   autoConnect: true,
   transports: ['websocket', 'polling'],
   reconnection: true,
-  reconnectionAttempts: 10,
-  reconnectionDelay: 2000
+  // Thử kết nối lại vô hạn: máy chủ bật lại lúc nào thì đèn "Máy Chủ" tự chuyển Online.
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 2000,
+  reconnectionDelayMax: 5000
 });

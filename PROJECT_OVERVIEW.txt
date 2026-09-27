@@ -529,4 +529,20 @@ chạy backend vào danh sách cho phép.
   - Bỏ nút "Test UI (Mô phỏng Dữ liệu)" và toàn bộ logic mô phỏng trong
     useTelemetry.js (isSimulating, toggleSimulation).
   - Bỏ nhãn phiên bản ("Bản VER1/VER2 ...") cạnh tiêu đề.
+
+10.5. TRIỂN KHAI VERCEL + NGROK
+  - Frontend chạy trên Vercel (https://project-of-iot.vercel.app), backend
+    chạy trên laptop và mở ra Internet qua ngrok
+    (https://tumbling-penknife-snore.ngrok-free.dev). Trên Vercel đã khai báo
+    VITE_API_URL / VITE_SOCKET_URL trỏ tới địa chỉ ngrok này.
+  - Muốn web có dữ liệu thì laptop phải chạy ĐỒNG THỜI 2 cửa sổ:
+      1) cd backend  ->  npm start
+      2) ngrok http --url=tumbling-penknife-snore.ngrok-free.dev 5000
+    Tắt một trong hai -> đèn "Máy Chủ" trên web báo Offline
+    (ngrok tắt thì địa chỉ trên trả lỗi 404 ERR_NGROK_3200).
+  - Sửa: socket.js trước đây chỉ thử kết nối lại 10 lần (~20 giây) rồi bỏ
+    cuộc, nên nếu mở web lúc máy chủ đang tắt thì đèn "Máy Chủ" kẹt ở
+    Offline mãi, phải tải lại trang. Nay thử lại vô hạn (mỗi 2-5 giây).
+  - Sửa: bỏ index { _id: -1 } trong models/Telemetry.js (MongoDB không cho
+    tạo lại index _id, gây cảnh báo "[MONGOOSE] Warning ... _id" khi chạy).
 ==========================================================================

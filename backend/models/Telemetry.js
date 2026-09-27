@@ -45,9 +45,6 @@ const TelemetrySchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index phục vụ truy vấn lịch sử nhanh
-TelemetrySchema.index({ _id: -1 });
-
 // TTL Index: MongoDB tự động xóa dữ liệu sau 30 ngày
 TelemetrySchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
 

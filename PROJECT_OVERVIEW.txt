@@ -540,6 +540,20 @@ chạy backend vào danh sách cho phép.
       2) ngrok http --url=tumbling-penknife-snore.ngrok-free.dev 5000
     Tắt một trong hai -> đèn "Máy Chủ" trên web báo Offline
     (ngrok tắt thì địa chỉ trên trả lỗi 404 ERR_NGROK_3200).
+  - Cài ngrok trên máy mới: winget install --id Ngrok.Ngrok -e rồi chạy
+    "ngrok update" (bản trên winget đã cũ). Lần đầu phải đăng nhập bằng:
+      ngrok config add-authtoken <TOKEN>
+    Tên miền tĩnh *.ngrok-free.dev gắn với MỘT tài khoản ngrok: chỉ máy nào
+    dùng authtoken của tài khoản đó mới mở được đúng tên miền này, và mỗi
+    lúc chỉ một máy được mở. Dùng tài khoản khác thì phải đổi
+    VITE_API_URL / VITE_SOCKET_URL trên Vercel rồi Redeploy.
+  - Lỗi 502 Bad Gateway trong cửa sổ ngrok = ngrok chạy nhưng backend
+    (npm start) đang tắt.
+  - Sửa: ngrok bản free trả về trang HTML cảnh báo ("You are about to
+    visit...") thay cho JSON với request từ trình duyệt, làm web không tải
+    được lịch sử và không gửi được lệnh (WebSocket vẫn chạy nên đèn Máy Chủ
+    vẫn Online). -> api.js và socket.js gửi kèm header
+    "ngrok-skip-browser-warning: true".
   - Sửa: socket.js trước đây chỉ thử kết nối lại 10 lần (~20 giây) rồi bỏ
     cuộc, nên nếu mở web lúc máy chủ đang tắt thì đèn "Máy Chủ" kẹt ở
     Offline mãi, phải tải lại trang. Nay thử lại vô hạn (mỗi 2-5 giây).

@@ -6,7 +6,11 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || `http://${hostname}:5000/ap
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 5000,
-  headers: { 'Content-Type': 'application/json' }
+  headers: {
+    'Content-Type': 'application/json',
+    // ngrok bản free chèn trang cảnh báo HTML vào request từ trình duyệt; header này bỏ qua nó.
+    'ngrok-skip-browser-warning': 'true'
+  }
 });
 
 export const getHealth = async () => (await apiClient.get('/health')).data;
